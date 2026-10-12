@@ -149,18 +149,18 @@ static void ShowDownloadFailedPopup(const std::string& dllName,
                                     const std::string& component)
 {
     SteamDiagnostics::ShowWarning(
-        "OpenSteamTool - Unsupported Steam Version",
-        "OpenSteamTool: signature file not found for " + dllName + ".\n\n"
-        "Hooks that depend on " + dllName + " are disabled for this session; "
-        "other modules are unaffected.\n\n"
-        "You can:\n"
-        "  1. Wait for the next signature update, then restart Steam.\n"
-        "  2. Drop a matching TOML at:\n"
-        "       <Steam>\\opensteamtool\\pattern\\" + component + "\\" + sha256 + ".toml\n"
-        "  3. Check upstream:\n"
-        "       https://github.com/OpenSteam001/steam-monitor/tree/pattern/" + component + "\n"
-        "  4. Report the diagnostics below:\n"
-        "       https://github.com/OpenSteam001/OpenSteamTool/issues");
+            "OpenSteamTool - 不支持的 Steam 版本",
+            "OpenSteamTool：找不到 " + dllName + " 的签名文件。\n\n"
+            "依赖 " + dllName + " 的 hook 将在本会话中停用，"
+            "其他模块不受影响。\n\n"
+            "你可以：\n"
+            "  1. 等待下一次签名更新，然后重启 Steam。\n"
+            "  2. 手动放一份匹配的 TOML 到：\n"
+            "       <Steam>\\opensteamtool\\pattern\\" + component + "\\" + sha256 + ".toml\n"
+            "  3. 查看上游：\n"
+            "       https://github.com/OpenSteam001/steam-monitor/tree/pattern/" + component + "\n"
+            "  4. 按下方诊断信息反馈：\n"
+            "       https://github.com/huanyuejue/OpenSteamTool/issues");
 }
 
 } // namespace
@@ -215,16 +215,9 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
                  component, parseErr.empty() ? "no entries" : parseErr);
     }
 
-    // 失败分级：只有上游真没发布（全镜像 404）才弹窗；网络故障/坏内容静默降级，
-    // 下次启动自动再试。误弹窗比静默更伤（文案让人干等更新）。
-    if (r.allNotFound) {
-        std::string sha = r.sha256.empty() ? "(hash failed)" : r.sha256;
-        ShowDownloadFailedPopup(dllName, sha, component);
-    } else {
-        LOG_WARN("PatternLoader: {} spec unavailable (network or bad upstream content), "
-                 "hooks depending on {} are disabled for this session without popup; will retry next launch",
-                 dllName, dllName);
-    }
+    // 失败即弹窗：缺文件就告诉用户，不静默。
+    std::string sha = r.sha256.empty() ? "(hash failed)" : r.sha256;
+    ShowDownloadFailedPopup(dllName, sha, component);
     g_failedModules.insert(module);
     return false;
 }
@@ -305,13 +298,13 @@ void ReportMissingFunctions()
     g_missingFunctions.clear();
 
     SteamDiagnostics::ShowWarning(
-        "OpenSteamTool - Missing Signatures",
-        "OpenSteamTool: some functions could not be located.\n\n"
-        "The following functions were not found in the signature file:\n" +
+        "OpenSteamTool - 签名缺失",
+        "OpenSteamTool：部分函数未能定位。\n\n"
+        "以下函数在签名文件中找不到：\n" +
         list +
-        "\nHooks for these functions are disabled for this session.\n\n"
-        "Please report this at:\n"
-        "https://github.com/OpenSteam001/OpenSteamTool/issues");
+        "\n这些函数的 hook 将在本会话中停用。\n\n"
+        "请按此反馈：\n"
+        "https://github.com/huanyuejue/OpenSteamTool/issues");
 }
 
 } // namespace PatternLoader

@@ -145,15 +145,14 @@ namespace {
     static void ShowMissingPopup(const std::string& sha256)
     {
         SteamDiagnostics::ShowWarning(
-            "OpenSteamTool - IPC spec missing",
-            "OpenSteamTool: IPC spec file not found.\n\n"
-            "IPC interception is disabled for this session; pattern-based "
-            "hooks are unaffected.\n\n"
-            "You can:\n"
-            "  1. Wait for the next upstream publish and restart Steam.\n"
-            "  2. Drop a matching TOML at:\n"
+            "OpenSteamTool - 缺少 IPC 描述文件",
+            "OpenSteamTool：找不到 IPC 描述文件。\n\n"
+            "本会话 IPC 拦截已停用，基于特征码的 hook 不受影响。\n\n"
+            "你可以：\n"
+            "  1. 等待上游发布新的描述文件，然后重启 Steam。\n"
+            "  2. 手动放一份匹配的 TOML 到：\n"
             "       <Steam>\\opensteamtool\\ipc\\steamclient\\" + sha256 + ".toml\n"
-            "  3. Check upstream:\n"
+            "  3. 查看上游：\n"
             "       https://github.com/OpenSteam001/steam-monitor/tree/ipc/steamclient");
     }
 
@@ -245,15 +244,15 @@ bool Load(const std::string& steamclientPath)
         }
     }
 
-    // 大声失败，但分级：只有上游真没发布才弹窗；网络故障静默 ERROR，
-    // 下次启动再试（和 PatternLoader 一致，避免误导用户干等更新）。
+    // 大声失败：缺文件就弹窗，不静默。
+    // 0 方法还当成功是玄学 54 的根源，绝不再静默。
     if (allNotFound) {
         LOG_ERROR("IPCLoader: IPC spec not published upstream, IPC interception disabled for this session");
-        ShowMissingPopup(sha256.empty() ? "(hash failed)" : sha256);
     } else {
-        LOG_ERROR("IPCLoader: IPC spec unavailable (network or bad upstream content), "
-                  "IPC interception disabled for this session without popup; will retry next launch");
+        LOG_ERROR("IPCLoader: IPC spec download failed (network or bad upstream content), "
+                  "IPC interception disabled for this session; will retry next launch");
     }
+    ShowMissingPopup(sha256.empty() ? "(hash failed)" : sha256);
     return false;
 }
 
