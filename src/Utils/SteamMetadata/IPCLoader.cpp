@@ -178,7 +178,7 @@ static bool HasRequiredInterfaces()
 // 启动路径上付双倍网络超时。
 enum class TryResult { Ok, Retryable, Fatal };
 
-static TryResult TryLoadOnce(const std::string& steamclientPath, std::string& sha256, bool& fromCache)
+static TryResult TryLoadOnce(const std::string& steamclientPath, std::string& sha256, bool& fromCache, bool& allNotFound)
 {
     RemoteToml::Result r = RemoteToml::Fetch({
         kIPCChannel,
@@ -187,6 +187,7 @@ static TryResult TryLoadOnce(const std::string& steamclientPath, std::string& sh
     });
     sha256 = r.sha256;
     fromCache = r.fromCache;
+    allNotFound = r.allNotFound;
 
     if (!r.ok) return TryResult::Fatal;
 
@@ -220,7 +221,8 @@ bool Load(const std::string& steamclientPath)
 
     std::string sha256;
     bool fromCache = false;
-    const TryResult first = TryLoadOnce(steamclientPath, sha256, fromCache);
+    bool allNotFound = false;
+    const TryResult first = TryLoadOnce(steamclientPath, sha256, fromCache, allNotFound);
     if (first == TryResult::Ok) {
         LOG_INFO("IPCLoader: loaded {} methods across {} interfaces ({})",
                  MethodCount(), InterfaceCount(),
@@ -235,7 +237,7 @@ bool Load(const std::string& steamclientPath)
         LOG_WARN("IPCLoader: parsed spec missing required interfaces, dropping stale cache and refetching once");
         RemoteToml::Invalidate({ kIPCChannel, "steamclient", steamclientPath });
         g_registry.Clear();
-        if (TryLoadOnce(steamclientPath, sha256, fromCache) == TryResult::Ok) {
+        if (TryLoadOnce(steamclientPath, sha256, fromCache, allNotFound) == TryResult::Ok) {
             LOG_INFO("IPCLoader: self-heal ok, loaded {} methods across {} interfaces ({})",
                      MethodCount(), InterfaceCount(),
                      fromCache ? "cache" : "remote");
@@ -243,9 +245,15 @@ bool Load(const std::string& steamclientPath)
         }
     }
 
-    // 大声失败：0 方法还当成功是玄学 54 的根源，必须弹窗 + ERROR。
-    LOG_ERROR("IPCLoader: IPC spec unusable, IPC interception disabled for this session");
-    ShowMissingPopup(sha256.empty() ? "(hash failed)" : sha256);
+    // 大声失败，但分级：只有上游真没发布才弹窗；网络故障静默 ERROR，
+    // 下次启动再试（和 PatternLoader 一致，避免误导用户干等更新）。
+    if (allNotFound) {
+        LOG_ERROR("IPCLoader: IPC spec not published upstream, IPC interception disabled for this session");
+        ShowMissingPopup(sha256.empty() ? "(hash failed)" : sha256);
+    } else {
+        LOG_ERROR("IPCLoader: IPC spec unavailable (network or bad upstream content), "
+                  "IPC interception disabled for this session without popup; will retry next launch");
+    }
     return false;
 }
 

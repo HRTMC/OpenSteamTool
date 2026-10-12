@@ -14,6 +14,9 @@ namespace RemoteToml {
         bool        fromCache = false;
         std::string body;
         std::string sha256;
+        // 下载失败时才有意义：所有镜像都 404 = 上游真没发布（该弹窗）；
+        // false = 网络故障/超时（该静默，下次再试）。成功时恒 false。
+        bool        allNotFound = false;
     };
 
     // 优先复用以 SHA 命名的本地缓存，缺失时按序轮询全部远端镜像，全部失败才返回空

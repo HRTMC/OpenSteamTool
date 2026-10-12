@@ -131,7 +131,9 @@ Result Fetch(const Request& request)
     }
 
     // 3. Cache miss -> try remote (poll all mirrors in order).
-    // 逐个尝试全部镜像才判定失败：CDN 同步存在延迟，首个镜像 404 时后一个镜像可能已有文件
+    // 逐个尝试全部镜像才判定失败：CDN 同步存在延迟，首个镜像 404 时后一个镜像可能已有文件。
+    // transport 失败（非 404）每个镜像多打一次：跨国链路抖一下很常见，一次重试专治抖动；
+    // 404 不重试（重下也是没有）。单次重试封顶，不在启动路径上烧时间。
     const std::vector<std::string> urlTemplates = BuildUrlTemplates();
     OSTPlatform::Http::Result http;
     std::string lastUrl;
@@ -144,6 +146,15 @@ Result Fetch(const Request& request)
 
         http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
                                           nullptr, 0, nullptr);
+
+        const bool is404 = http.ok && http.status == 404;
+        const bool gotBody = http.ok && http.status == 200 && !http.body.empty();
+        if (!gotBody && !is404) {
+            LOG_INFO("RemoteToml({}/{}): transport failed ({} ok={} HTTP={}), retrying once",
+                     request.channel, request.component, lastUrl, http.ok, http.status);
+            http = OSTPlatform::Http::Execute(L"GET", lastUrl.c_str(),
+                                              nullptr, 0, nullptr);
+        }
 
         if (http.ok && http.status == 200 && !http.body.empty()) break;
 
@@ -199,8 +210,11 @@ Result Fetch(const Request& request)
     }
 
     // 5. Total failure — caller handles popup / degraded mode.
-    // 区分全部 404 与网络故障：前者表示上游未发布，后者表示本机网络问题
-    if (!urlTemplates.empty() && notFoundCount == urlTemplates.size()) {
+    // 区分全部 404 与网络故障：前者表示上游未发布，后者表示本机网络问题。
+    // allNotFound 语义收紧：必须至少尝试过一个镜像且全 404 才算（模板配错导致
+    // 零尝试不算"未发布"，算配置错，同样不弹窗）。
+    out.allNotFound = !urlTemplates.empty() && notFoundCount == urlTemplates.size();
+    if (out.allNotFound) {
         LOG_WARN("RemoteToml({}/{}): upstream has not published (all {} mirrors 404, last URL: {})",
                  request.channel, request.component, urlTemplates.size(),
                  lastUrl.empty() ? "<none>" : lastUrl);

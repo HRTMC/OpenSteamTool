@@ -174,31 +174,57 @@ namespace PatternLoader {
 bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& dllPath, const std::string& component)
 {
     namespace fs = std::filesystem;
+    const RemoteToml::Request req{ kPatternChannel, component, dllPath };
+    const std::string dllName = fs::path(dllPath).filename().string();
+
+    auto tryParse = [&](const RemoteToml::Result& res, PatternMap& out, std::string& err) -> bool {
+        if (!res.ok) return false;
+        out = ParsePatternString(res.body, &err);
+        return !out.empty();
+    };
 
     // Delegate fetch + cache + mirror fallback to RemoteToml.
-    RemoteToml::Result r = RemoteToml::Fetch({
-        kPatternChannel,
-        component,
-        dllPath,
-    });
+    PatternMap map;
+    std::string parseErr;
+    RemoteToml::Result r = RemoteToml::Fetch(req);
+    if (tryParse(r, map, parseErr)) {
+        LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
+                 map.size(), component, r.fromCache ? "cache" : "remote");
+        g_moduleMaps[module] = std::move(map);
+        return true;
+    }
 
-    if (r.ok) {
-        std::string parseErr;
-        PatternMap map = ParsePatternString(r.body, &parseErr);
-        if (!map.empty()) {
-            LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
+    // 自愈：只有"缓存有内容但解析空"才值得删了重下（串台文件）；
+    // 下载失败/远端坏内容重下也没用。只一次。
+    if (r.ok && r.fromCache) {
+        LOG_WARN("PatternLoader: parsed empty spec for {} ({}), dropping stale cache and refetching once",
+                 component, parseErr.empty() ? "no entries" : parseErr);
+        RemoteToml::Invalidate(req);
+        r = RemoteToml::Fetch(req);
+        parseErr.clear();
+        if (tryParse(r, map, parseErr)) {
+            LOG_INFO("PatternLoader: self-heal ok, loaded {} patterns for {} ({})",
                      map.size(), component, r.fromCache ? "cache" : "remote");
             g_moduleMaps[module] = std::move(map);
             return true;
         }
+    } else if (!r.ok) {
+        LOG_WARN("PatternLoader: download failed for {} (see RemoteToml log above)", component);
+    } else {
         LOG_WARN("PatternLoader: TOML for {} parsed empty ({})",
                  component, parseErr.empty() ? "no entries" : parseErr);
     }
 
-    // Total failure — popup + disable module's hooks.
-    std::string dllName = fs::path(dllPath).filename().string();
-    std::string sha     = r.sha256.empty() ? "(hash failed)" : r.sha256;
-    ShowDownloadFailedPopup(dllName, sha, component);
+    // 失败分级：只有上游真没发布（全镜像 404）才弹窗；网络故障/坏内容静默降级，
+    // 下次启动自动再试。误弹窗比静默更伤（文案让人干等更新）。
+    if (r.allNotFound) {
+        std::string sha = r.sha256.empty() ? "(hash failed)" : r.sha256;
+        ShowDownloadFailedPopup(dllName, sha, component);
+    } else {
+        LOG_WARN("PatternLoader: {} spec unavailable (network or bad upstream content), "
+                 "hooks depending on {} are disabled for this session without popup; will retry next launch",
+                 dllName, dllName);
+    }
     g_failedModules.insert(module);
     return false;
 }
