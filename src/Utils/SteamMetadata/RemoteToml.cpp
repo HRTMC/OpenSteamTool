@@ -212,4 +212,26 @@ Result Fetch(const Request& request)
     return out;
 }
 
+bool Invalidate(const Request& request)
+{
+    namespace fs = std::filesystem;
+    const std::string sha256 = SteamDiagnostics::Sha256Of(request.dllPath);
+    if (sha256.empty()) return false;
+    fs::path cachePath = fs::path(request.dllPath).parent_path() /
+                         "opensteamtool" / request.channel / request.component /
+                         (sha256 + ".toml");
+    std::error_code ec;
+    const bool removed = fs::remove(cachePath, ec);
+    if (ec) {
+        LOG_WARN("RemoteToml({}/{}): failed to remove stale cache {} ({})",
+                 request.channel, request.component, cachePath.string(), ec.message());
+        return false;
+    }
+    if (removed) {
+        LOG_WARN("RemoteToml({}/{}): removed stale cache {}",
+                 request.channel, request.component, cachePath.string());
+    }
+    return removed;
+}
+
 } // namespace RemoteToml
