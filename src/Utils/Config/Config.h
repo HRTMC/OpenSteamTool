@@ -66,8 +66,9 @@ namespace Config {
 
     // [remote]
     inline std::string remoteUrlTemplate;
-    // 默认 jsDelivr 优先、GitHub 兜底；配成 "github-first" 切回老顺序
-    inline std::string remoteOrder = "jsdelivr-first";
+    // 默认 gh-proxy 镜像优先、GitHub 直连兜底；配成 "github-first" 切顺序；
+    // 旧值 "jsdelivr-first" 继续认，等同 gh-proxy-first
+    inline std::string remoteOrder = "gh-proxy-first";
 
     // [stats]
     inline bool statsEnableApi = true;

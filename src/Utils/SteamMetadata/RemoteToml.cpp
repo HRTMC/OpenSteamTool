@@ -19,8 +19,10 @@ namespace {
     constexpr const char* kGithubTemplate =
         "https://raw.githubusercontent.com/hazre/steam-monitor/"
         "main/{channel}/{component}/{sha256}.toml";
-    constexpr const char* kJsdelivrTemplate =
-        "https://cdn.jsdelivr.net/gh/hazre/steam-monitor@"
+    // gh-proxy 套在 raw 直连外面：对大仓库的 raw 文件比 jsDelivr 稳定，
+    // 失败才回退 GitHub 直连保底。
+    constexpr const char* kGhProxyTemplate =
+        "https://gh-proxy.com/https://raw.githubusercontent.com/hazre/steam-monitor/"
         "main/{channel}/{component}/{sha256}.toml";
 
     static bool HasPlaceholder(std::string_view text, std::string_view placeholder)
@@ -69,10 +71,10 @@ namespace {
             return { remoteUrlTemplate };
         }
 
-        // 默认优先请求 jsDelivr，失败再回退 GitHub，保证直连环境下的可用性
+        // 默认优先请求 gh-proxy 镜像，失败再回退 GitHub 直连
         if (Config::GetRemoteOrder() == "github-first")
-            return { kGithubTemplate, kJsdelivrTemplate };
-        return { kJsdelivrTemplate, kGithubTemplate };
+            return { kGithubTemplate, kGhProxyTemplate };
+        return { kGhProxyTemplate, kGithubTemplate };
     }
 } // namespace
 

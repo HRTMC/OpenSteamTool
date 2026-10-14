@@ -20,7 +20,7 @@ namespace {
         std::string logDir;
         std::vector<std::string> luaPaths;
         std::string remoteUrlTemplate;
-        std::string remoteOrder = "jsdelivr-first";
+        std::string remoteOrder = "gh-proxy-first";
         bool statsEnableApi = true;
         std::string presenceDisplay = "spacewar";
         InjectionSettings injection;
@@ -172,7 +172,9 @@ namespace {
                 }
                 if (auto val = (*remote)["order"].value<std::string>()) {
                     const std::string order = NormalizeRemoteOrder(*val);
-                    if (order == "github-first" || order == "jsdelivr-first") {
+                    // "jsdelivr-first" 是旧名，继续认，语义等同 gh-proxy-first。
+                    if (order == "github-first" || order == "gh-proxy-first" ||
+                        order == "jsdelivr-first") {
                         snapshot.remoteOrder = order;
                     } else {
                         LOG_WARN("Unknown remote.order \"{}\", keeping default \"{}\"", *val, snapshot.remoteOrder);

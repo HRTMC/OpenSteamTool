@@ -212,7 +212,7 @@ OpenSteamTool 不再在 DLL 中内置字节模式签名。相反，每次启动�
 查找顺序（本地无对应 SHA 缓存时，即 Steam 更新后首次启动）：
 
 1. **本地缓存** — `<Steam>\opensteamtool\pattern\<subdir>\<sha256>.toml`。命中直接使用，不再请求远端。每次成功远程获取后覆盖缓存
-2. **jsDelivr CDN** — `https://cdn.jsdelivr.net/gh/OpenSteam001/steam-monitor@pattern/...`。默认来源
+2. **gh-proxy 镜像** — `https://gh-proxy.com/https://raw.githubusercontent.com/...`。默认来源
 3. **GitHub raw** — 当前一个镜像返回 404 / 连接失败 / 超时 / 5xx 时自动尝试下一个。无需配置。配置 `[remote] order = "github-first"` 可恢复之前的 GitHub 优先顺序
 
 只有全部镜像都返回 **HTTP 404**，才判定上游机器人尚未为此 Steam 版本发布 TOML。此时若无本地缓存，会出现一次性弹窗，显示不匹配的 DLL 名称、其 SHA-256、预期缓存路径和上游 URL。仅禁用与该 DLL 相关的钩子——OpenSteamTool 的其余部分继续工作
@@ -223,14 +223,14 @@ OpenSteamTool 不再在 DLL 中内置字节模式签名。相反，每次启动�
 
 #### 使用不同的镜像
 
-对大多数用户来说，内置的 **jsDelivr -> GitHub** 回退已经足够。要使用私有镜像或内网服务器，配置完整的 URL 模板。自定义镜像替换内置远程源；本地缓存回退仍然可用
+对大多数用户来说，内置的 **gh-proxy -> GitHub** 回退已经足够。要使用私有镜像或内网服务器，配置完整的 URL 模板。自定义镜像替换内置远程源；本地缓存回退仍然可用
 
 模板必须包含 `{channel}`、`{component}` 和 `{sha256}`。当前使用的通道是 `pattern` 和 `ipc`
 
 ```toml
 [remote]
-# 镜像顺序："jsdelivr-first"（默认）或 "github-first"。
-# order = "jsdelivr-first"
+# 镜像顺序："gh-proxy-first"（默认）或 "github-first"。
+# order = "gh-proxy-first"
 url_template = "https://your.server/{channel}/{component}/{sha256}.toml"
 # url_template = "https://fast.jsdelivr.net/gh/OpenSteam001/steam-monitor@{channel}/{component}/{sha256}.toml"
 ```
