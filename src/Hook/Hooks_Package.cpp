@@ -3,9 +3,11 @@
 #include "Hooks_SteamUI.h"
 #include "dllmain.h"
 #include "Utils/HookSupport/VehCommon.h"
+#include "Utils/SteamMetadata/SteamDiagnostics.h"
 #include <atomic>
 #include <mutex>
 #include <unordered_set>
+#include <windows.h>
 
 namespace {
     RESOLVE_FUNC(CUtlMemoryGrow,               void*, CUtlVector<AppId_t>*, int);
@@ -20,6 +22,16 @@ namespace {
     bool  g_licenseRefreshPending = false;
     // 回退自举一次性标志：看门狗线程置位，Steam IPC 线程消费（原子，跨线程）。
     std::atomic<bool> g_forceRequeryOnce{false};
+    // 注入熔断：注入路径崩过一次就永久停注本会话（游戏顶多不解锁，Steam 活着）。
+    std::atomic<bool> g_injectDisabled{false};
+    static DWORD g_injectExCode = 0;
+    static void* g_injectExAddr = nullptr;
+
+    static LONG WINAPI InjectionFilter(EXCEPTION_POINTERS* ep) {
+        g_injectExCode = ep->ExceptionRecord->ExceptionCode;
+        g_injectExAddr = ep->ExceptionRecord->ExceptionAddress;
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
 
     // 家庭共享许可集合：CheckAppOwnership 见过的 bFamilyShared/bBorrowed。
     // 真拥有走 LuaConfig::OwnedAppIdSet，这两个集合互斥，一起构成 HasValidLicense。
@@ -69,8 +81,24 @@ namespace {
             uint32 oldSize = pPkg->AppIdVec.m_Size;
             uint32 numToAdd = static_cast<uint32>(appIds.size());
             LOG_PACKAGE_INFO("InitFakeLicense(PackageId={}): adding {} apps, oldSize={}", kInjectedPackageId, numToAdd, oldSize);
+            // 容量门：新构建若改了 CUtlVector/PackageInfo 布局，按旧偏移读写就是堆破坏。
+            // 写之前验两遍（grow 前后），离谱直接放弃注入并大声报错，绝不碰内存。
+            // 上限按"正常包几百个"取极宽松值，只拦错乱值，不拦正常波动。
+            constexpr uint32 kMaxSaneAppCount = 100000;
+            const uint32 allocBefore = pPkg->AppIdVec.m_Memory.m_nAllocationCount;
+            if (oldSize > allocBefore || numToAdd > kMaxSaneAppCount || allocBefore > kMaxSaneAppCount) {
+                LOG_PACKAGE_ERROR("InitFakeLicense: implausible vector state (size={} alloc={} add={}), skipping injection (struct layout may have changed)",
+                                  oldSize, allocBefore, numToAdd);
+                return false;
+            }
             if (!CUtlMemoryGrowWrap(&pPkg->AppIdVec, numToAdd)) {
                 LOG_PACKAGE_WARN("InitFakeLicense(PackageId={}): failed to grow AppId vector", kInjectedPackageId);
+                return false;
+            }
+            const uint32 allocAfter = pPkg->AppIdVec.m_Memory.m_nAllocationCount;
+            if (allocAfter < oldSize + numToAdd || allocAfter > kMaxSaneAppCount) {
+                LOG_PACKAGE_ERROR("InitFakeLicense: grow result implausible (size={} alloc={} add={}), skipping write (keeping original length)",
+                                  oldSize, allocAfter, numToAdd);
                 return false;
             }
             for (uint32 i = 0; i < numToAdd; i++)
@@ -100,13 +128,41 @@ namespace {
     }
 
 
-    HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
+    // 注入路径全兜底：布局漂移的新构建上，注入及后续处理任何异常都不能带走 Steam。
+    // 崩一次就记码记地址、永久停注本会话（游戏顶多不解锁，Steam 活着 + 日志可查）。
+} // namespace
+
+// 构建门禁：只在验证过的 steamclient 构建上注入（fail-closed）。
+// 我的内存读写按硬编码结构体偏移来，新构建一漂移就是堆破坏+闪退；
+// 与其崩，不如在新构建上直接关注入（游戏不解锁但 Steam 活着），等核对完偏移再加白。
+// 白名单判一次就够，sha 跑起来不会变，static 缓存。
+bool Hooks_Package::IsVerifiedClientBuild() {
+        static const char* kVerifiedShas[] = {
+            "caba4826aa3501039d095aee1843a6bfb270fb43a3ab4455b2d6733223579fee", // 1788652215，跑过完整会话
+            "e9045710ec7ee47d7b7488d1c5dda2d933dec7e251e965967a5c48f4df68eb4e", // 1791，试跑验证中：布局是否漂移未知，先放行看崩不崩
+        };
+        static const bool allowed = [&] {
+            const std::string& sha = SteamDiagnostics::SteamClientSha256();
+            for (const char* known : kVerifiedShas) {
+                if (sha == known) return true;
+            }
+            LOG_PACKAGE_ERROR("CheckAppOwnership: unverified steamclient build (sha={}), license injection disabled for session",
+                              sha.empty() || sha[0] == '(' ? sha : sha.substr(0, 12));
+            return false;
+        }();
+        return allowed;
+}
+
+namespace {
+
+    static bool CheckAppOwnershipBody(void* pObj, AppId_t appId, AppOwnership* pOwn, bool result) {
+        if (!Hooks_Package::IsVerifiedClientBuild()) return result;
+
         if (!g_pCUser) {
             g_pCUser = pObj;
             LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", g_pCUser);
         }
 
-        bool result = oCheckAppOwnership(pObj, appId, pOwn);
         TryInitFakeLicenseOnce();
 
         // 自举刷新（只一次）：回退场景下这次调用大概率是第一次，
@@ -162,6 +218,23 @@ namespace {
 
         return result;
     }
+
+    HOOK_FUNC(CheckAppOwnership, bool, void* pObj, AppId_t appId, AppOwnership* pOwn) {
+        bool result = oCheckAppOwnership(pObj, appId, pOwn);
+        // 熔断后直接返回原结果，不再碰任何内存。
+        if (g_injectDisabled.load()) return result;
+        // 本函数只有 POD 局部量、无 C++ 对象，__try 在此合法（/EHsc）。
+        bool out = result;
+        __try {
+            out = CheckAppOwnershipBody(pObj, appId, pOwn, result);
+        } __except (InjectionFilter(GetExceptionInformation())) {
+            g_injectDisabled.store(true);
+            LOG_PACKAGE_ERROR("CheckAppOwnership: license path crashed (code=0x{:X} addr={}), injection disabled for session",
+                              g_injectExCode, g_injectExAddr);
+            return result;
+        }
+        return out;
+    }
 }
 
 namespace Hooks_Package {
@@ -198,6 +271,11 @@ namespace Hooks_Package {
     }
 
     void NotifyLicenseChanged() {
+        // 熔断后热重载也不碰内存：直接返回，pending 队列留给下次（量极小，可忽略）。
+        if (g_injectDisabled.load()) {
+            LOG_PACKAGE_WARN("NotifyLicenseChanged: injection disabled after crash, skipping");
+            return;
+        }
         PackageInfo* pPkg = g_pInjectedPackageInfo;
         if (!pPkg) {
             LOG_PACKAGE_WARN("NotifyLicenseChanged: injected PackageInfo not ready, cannot notify");

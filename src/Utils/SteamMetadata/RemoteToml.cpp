@@ -13,12 +13,15 @@
 namespace RemoteToml {
 
 namespace {
+    // 签名源：hazre/steam-monitor（15 分钟自动采集 stable+beta 并发布，文件更全）。
+    // 与 OpenSteam001 版布局差异：channel 不是分支而是 main 下的目录，
+    // 因此分支固定 main，{channel} 走路径段——占位符集合不变，模板机制兼容。
     constexpr const char* kGithubTemplate =
-        "https://raw.githubusercontent.com/OpenSteam001/steam-monitor/"
-        "{channel}/{component}/{sha256}.toml";
+        "https://raw.githubusercontent.com/hazre/steam-monitor/"
+        "main/{channel}/{component}/{sha256}.toml";
     constexpr const char* kJsdelivrTemplate =
-        "https://cdn.jsdelivr.net/gh/OpenSteam001/steam-monitor@"
-        "{channel}/{component}/{sha256}.toml";
+        "https://cdn.jsdelivr.net/gh/hazre/steam-monitor@"
+        "main/{channel}/{component}/{sha256}.toml";
 
     static bool HasPlaceholder(std::string_view text, std::string_view placeholder)
     {

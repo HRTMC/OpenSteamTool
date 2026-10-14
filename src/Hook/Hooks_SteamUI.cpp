@@ -4,6 +4,7 @@
 #include "dllmain.h"
 #include "steam_messages.pb.h"
 #include "Utils/HookSupport/VehCommon.h"
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string_view>
@@ -140,6 +141,58 @@ namespace
             return TRUE;
         }
         return oGetModuleHandleExW(dwFlags, lpModuleName, phModule);
+    }
+
+    // ── 首载抢劫（1791 隔离修复）─────────────────────────
+    // 1791 的 steam.exe 不再走 LoadModuleWithPath 拿 steamclient，而是启动期
+    // 直接 LoadLibraryExW，发生在劫持视野之外，adoption 永远等不来。
+    // 把 kernel32 的首载也挂上：凡是要 steamclient 的首载，直接给副本句柄。
+    // GetProcAddress 定位 kernel32 函数，不走 pattern（系统库地址精确、无需 toml）。
+    static decltype(&LoadLibraryExW) oLoadLibraryExW = nullptr;
+    static decltype(&LoadLibraryW) oLoadLibraryW = nullptr;
+    static std::atomic<bool> g_bypassFirstLoadRedirect{false};
+
+    static HMODULE TryDivertFirstLoad(LPCWSTR lpLibFileName) {
+        if (g_bypassFirstLoadRedirect.load(std::memory_order_acquire)) return nullptr;
+        if (!g_IsDiversionActive.load() || !client_hModule) return nullptr;
+        if (!IsSteamClientPathW(lpLibFileName)) return nullptr;
+        // 真·首载语义：原版已经在内存里，这次就是重复请求，直接放行拿原版。
+        // 不然（比如我们来晚了、启动期那次没抢到）就会造出“主 client 跑原版、
+        // 某个后来者拿副本”的分裂世界，还顺手把 adopted 置了压住回退，解锁全灭。
+        // GetModuleHandle 只是读 PEB，loader lock 下调安全。
+        if (GetModuleHandleW(lpLibFileName) || GetModuleHandleW(L"steamclient64.dll"))
+            return nullptr;
+        // pin 住副本再交出去：Steam 之后 FreeLibrary 只会降到我们的 pin，
+        // 副本常驻，绝不被卸（和“绝不 FreeLibrary 副本”是同一条命）。
+        // 直接调真实 API（:: 前缀也绕不过 Detours 的函数体补丁，但 FROM_ADDRESS
+        // 会让劫持直接放行走原函数，所以两种指针都安全；判空只是防野指针）。
+        HMODULE dummy = nullptr;
+        auto pinFn = oGetModuleHandleExW ? oGetModuleHandleExW : ::GetModuleHandleExW;
+        pinFn(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+              reinterpret_cast<LPCWSTR>(client_hModule), &dummy);
+        LOG_STEAMUI_INFO("FirstLoadRedirect: diverted steamclient first load -> diversion {} (adopted)",
+                         static_cast<void*>(client_hModule));
+        g_DiversionAdopted.store(true);
+        return static_cast<HMODULE>(client_hModule);
+    }
+
+    HMODULE WINAPI hkLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+    {
+        // 资源型/数据文件型加载不能劫：那种要的是文件内容不是可执行模块。
+        constexpr DWORD kDataFlags = LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE |
+                                     LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE;
+        if (!hFile && !(dwFlags & kDataFlags)) {
+            if (HMODULE diverted = TryDivertFirstLoad(lpLibFileName))
+                return diverted;
+        }
+        return oLoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    }
+
+    HMODULE WINAPI hkLoadLibraryW(LPCWSTR lpLibFileName)
+    {
+        if (HMODULE diverted = TryDivertFirstLoad(lpLibFileName))
+            return diverted;
+        return oLoadLibraryW(lpLibFileName);
     }
 
     HOOK_FUNC(LoadModuleWithPath, void*, const char* path, bool flags)
@@ -295,6 +348,40 @@ namespace Hooks_SteamUI
         return oLoadModuleWithPath != nullptr;
     }
 
+    void InstallFirstLoadRedirect()
+    {
+        // kernel32 常驻，GetProcAddress 精确定位，不需要 pattern/toml。
+        // 必须装在 SteamUI hook 之后：pin 要借 oGetModuleHandleExW（它在 Install 里就位，
+        // 万一没就位 TryDivertFirstLoad 里也会回落到真实 API，不会崩）。
+        const HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (!kernel32) {
+            LOG_STEAMUI_WARN("FirstLoadRedirect: kernel32 handle missing, skipping");
+            return;
+        }
+        oLoadLibraryExW = reinterpret_cast<decltype(oLoadLibraryExW)>(
+            GetProcAddress(kernel32, "LoadLibraryExW"));
+        oLoadLibraryW = reinterpret_cast<decltype(oLoadLibraryW)>(
+            GetProcAddress(kernel32, "LoadLibraryW"));
+        if (!oLoadLibraryExW || !oLoadLibraryW) {
+            LOG_STEAMUI_WARN("FirstLoadRedirect: GetProcAddress failed, skipping");
+            oLoadLibraryExW = nullptr;
+            oLoadLibraryW = nullptr;
+            return;
+        }
+        HOOK_BEGIN();
+        OSTPlatform::Detour::Attach(reinterpret_cast<void**>(&oLoadLibraryExW),
+                                    reinterpret_cast<void*>(hkLoadLibraryExW));
+        OSTPlatform::Detour::Attach(reinterpret_cast<void**>(&oLoadLibraryW),
+                                    reinterpret_cast<void*>(hkLoadLibraryW));
+        HOOK_END();
+        LOG_STEAMUI_INFO("FirstLoadRedirect: armed (steamclient first load will be diverted)");
+    }
+
+    void SetFirstLoadRedirectBypass(bool bypass)
+    {
+        g_bypassFirstLoadRedirect.store(bypass, std::memory_order_release);
+    }
+
     void Uninstall()
     {
         UNHOOK_BEGIN();
@@ -303,6 +390,8 @@ namespace Hooks_SteamUI
         OSTPlatform::Detour::Detach(reinterpret_cast<void**>(&oGetModuleHandleExA), reinterpret_cast<void*>(hkGetModuleHandleExA));
         OSTPlatform::Detour::Detach(reinterpret_cast<void**>(&oGetModuleHandleExW), reinterpret_cast<void*>(hkGetModuleHandleExW));
         UNINSTALL_HOOK(LoadModuleWithPath);
+        UNINSTALL_HOOK(LoadLibraryExW);
+        UNINSTALL_HOOK(LoadLibraryW);
         UNINSTALL_HOOK(FillInAppOverview);
         UNINSTALL_HOOK(BuildCompleteAppOverviewChange);
         UNINSTALL_HOOK(CSteamUIAppControllerRunFrame);

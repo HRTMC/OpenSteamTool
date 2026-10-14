@@ -11,6 +11,9 @@ namespace SteamDiagnostics {
     // Reuse captured hashes for known Steam DLLs and hash other files on demand.
     std::string Sha256Of(const std::string& path);
 
+    // Captured steamclient64.dll SHA256 ("(unavailable)" if Initialize never ran / hash failed).
+    const std::string& SteamClientSha256();
+
     // Display a warning asynchronously with the captured Steam diagnostics.
     void ShowWarning(std::string title, std::string message);
 

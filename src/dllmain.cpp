@@ -22,6 +22,12 @@ namespace {
 constexpr int kDiversionCopyRetries = 3;
 constexpr std::chrono::milliseconds kDiversionCopyRetryDelay{50};
 
+// DllMain 里记一笔：我们进进程时 steamclient64 是否已经在内存了。
+// 是 = 来晚了，首载抢劫不可能生效（Steam 不会再 Load 第二次），日志里直接判死刑；
+// 否 = 首载还没发生，FirstLoadRedirect 有机会抢。GetModuleHandle 只是读 PEB，
+// loader lock 下调安全。StartDetached 建线程自带 happens-before，直接读就行。
+bool g_steamClientMappedAtAttach = false;
+
 bool IsDiversionUpToDate() {
     WIN32_FILE_ATTRIBUTE_DATA origAttr{}, divAttr{};
     const bool origExists =
@@ -87,6 +93,10 @@ static bool FallbackToOriginalSteamClient(bool clientHooksArmed) {
     // 一旦卸载，下一次 stats/cloud RPC 就踩野指针崩溃（已实测：回退 12 秒后死）。
     // 副本废弃但保持映射（多一个模块映射的代价），hook 已卸、谁也不会再用它，安全。
     // client_hModule 直接指向原版，后续劫持分发与查询重定向全走原版，全程一致。
+    // 注意：回退后整个会话是原版世界，首载抢劫必须永久 bypass——不然之后谁再
+    // LoadLibrary(steamclient) 会拿到副本，两套 client 并存直接精神分裂。
+    // 所以这里只开不开（连 fallback 自己的这次 Load 也顺手放行了）。
+    Hooks_SteamUI::SetFirstLoadRedirectBypass(true);
     client_hModule = OSTPlatform::DynamicLibrary::Load(SteamclientPath);
     g_IsDiversionActive.store(false);
     if (!client_hModule) {
@@ -126,6 +136,15 @@ static uint32_t DiversionWatchdog() {
         if (!g_HooksInstalled.load()) return 0;
     }
     if (!g_IsDiversionActive.load() || g_DiversionAdopted.load()) return 0;
+    // 白名单外的构建直接跳过运行时回退：注入和 client hook 本来就会被门禁拦掉，
+    // 回退搬家除了风险什么也换不来。已验证构建不受影响，照样回退保解锁。
+    if (!Hooks_Package::IsVerifiedClientBuild()) {
+        LOG_WARN("Diversion: Steam did not adopt the diversion module within {}s, "
+                 "but license injection is disabled for this steamclient build — "
+                 "skipping runtime fallback (no unlock to save, avoiding known crash)",
+                 static_cast<int>(kDiversionAdoptTimeout.count()));
+        return 0;
+    }
     LOG_WARN("Diversion: Steam did not adopt the diversion module within {}s "
              "(still using startup-loaded original), falling back to original steamclient64",
              static_cast<int>(kDiversionAdoptTimeout.count()));
@@ -200,6 +219,11 @@ bool InitializeSteamComponents()
 static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule) {
     Log::Init(selfModule);
     LOG_INFO("OpenSteamTool init thread started");
+    LOG_INFO("OpenSteamTool attach: steamclient64 already mapped = {} ({})",
+             g_steamClientMappedAtAttach,
+             g_steamClientMappedAtAttach
+                 ? "we arrived late, first-load redirect cannot work"
+                 : "first load not yet happened, FirstLoadRedirect may catch it");
 
     if (!InitializeSteamComponents()) {
         LOG_ERROR("InitializeSteamComponents failed");
@@ -221,6 +245,11 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     // SteamUI hook 先装：LoadModuleWithPath 劫持必须在 Steam 自己加载
     // steamclient 之前就位，它内部会等 g_HooksInstalled 屏障再放行。
     SteamUI::CoreHook();
+
+    // 首载抢劫（1791 隔离修复）：diversion 就绪的前提下把 kernel32 首载也挂上，
+    // 抢到就是隔离生效；来晚了它自然打空，不影响现有流程。
+    if (g_IsDiversionActive.load())
+        Hooks_SteamUI::InstallFirstLoadRedirect();
 
     // 如果劫持没装上（pattern 缺失），影子模块就是没人用的摆设——
     // 此时必须换回原版再装 client hook，否则解锁静默全灭。
@@ -266,6 +295,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved)
     if (dwReason == DLL_PROCESS_ATTACH)
     {
         DisableThreadLibraryCalls(hModule);
+        g_steamClientMappedAtAttach = (GetModuleHandleW(L"steamclient64.dll") != nullptr);
         // Hand off all real work to a worker thread to avoid running file I/O,
         // module loading and detour transactions under the loader lock.
         OSTPlatform::Thread::StartDetached([module = reinterpret_cast<OSTPlatform::DynamicLibrary::ModuleHandle>(hModule)] {

@@ -8,7 +8,9 @@
 #include "Utils/Tickets/LegacyCDKey.h"
 #include "Utils/Support/FnvHash.h"
 #include "Utils/CloudRedirect/CloudRedirectHost.h"
+#include <atomic>
 #include <chrono>
+#include <excpt.h>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -57,13 +59,84 @@ namespace {
         return "?";
     }
 
+    // ── CNetPacket 字段自适应 ─────────────────────────────
+    // 我在 1791 上实测：CNetPacket 的内存布局变了，还按 1788 的偏移 (+8/+16)
+    // 读 m_pubData 拿到野指针，UnpackRaw 里直接崩（四次 dump 全是这个形状）。
+    // 注意收包路径的 pubData 不是直接参数，是从包对象里按偏移抠出来的——
+    // 发包路径的 pubData 是 Steam 直接传进来的，所以发包解析一直正常。
+    // Valve 改一次布局我就得跟一次——改成运行时自适应：拿 pPacket 按候选偏移扫，
+    // 找满足“指针可读 + 头 4 字节带 proto 标志 + 长度合理”的 (data,len) 对，
+    // 找到就缓存本会话。找不到就直通，绝不碰。1788 走 legacy 偏移一次命中，行为不变。
+    struct PacketFieldLayout { uint32 dataOff = 8; uint32 sizeOff = 16; };
+    static PacketFieldLayout g_packetLayout;
+    static std::atomic<bool> g_packetLayoutReady{false};
+    static std::mutex g_packetLayoutMutex;
+
+    // SEH 里只放 POD + memcpy，不放任何带析构的东西，吞了异常直接返回 false。
+    static bool ProbePacketFields(const CNetPacket* p, uint32 dataOff, uint32 sizeOff) {
+        __try {
+            const uint8* base = reinterpret_cast<const uint8*>(p);
+            uint8* data = nullptr;
+            uint32 size = 0;
+            memcpy(&data, base + dataOff, sizeof(data));
+            memcpy(&size, base + sizeOff, sizeof(size));
+            if (!data || size < sizeof(MsgHdr) || size > kMaxPacketSize) return false;
+            uint32 eMsg = 0;
+            memcpy(&eMsg, data, sizeof(eMsg));
+            if (!(eMsg & kMsgHdrProtoFlag)) return false;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    static bool EnsurePacketLayout(const CNetPacket* p) {
+        if (g_packetLayoutReady.load(std::memory_order_acquire)) return true;
+        if (!p) return false;
+        std::lock_guard<std::mutex> lock(g_packetLayoutMutex);
+        if (g_packetLayoutReady.load(std::memory_order_relaxed)) return true;
+        // legacy 优先：1788 一次命中，热路径零影响；1791 顺移的布局也能被扫出来。
+        static const uint32 kDataOffCandidates[] = {8, 16, 24, 32, 40};
+        for (const uint32 dOff : kDataOffCandidates) {
+            const uint32 sOff = dOff + 8;  // len 紧跟 ptr（1788 布局 +8/+16，新布局同理顺移）
+            if (ProbePacketFields(p, dOff, sOff)) {
+                g_packetLayout.dataOff = dOff;
+                g_packetLayout.sizeOff = sOff;
+                g_packetLayoutReady.store(true, std::memory_order_release);
+                LOG_NETPACKET_INFO("CNetPacket layout resolved: dataOff={} sizeOff={}",
+                                   dOff, sOff);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    inline uint8* PktData(const CNetPacket* p) {
+        uint8* d = nullptr;
+        memcpy(&d, reinterpret_cast<const uint8*>(p) + g_packetLayout.dataOff, sizeof(d));
+        return d;
+    }
+    inline uint32 PktSize(const CNetPacket* p) {
+        uint32 s = 0;
+        memcpy(&s, reinterpret_cast<const uint8*>(p) + g_packetLayout.sizeOff, sizeof(s));
+        return s;
+    }
+    inline void SetPktData(CNetPacket* p, uint8* d) {
+        memcpy(reinterpret_cast<uint8*>(p) + g_packetLayout.dataOff, &d, sizeof(d));
+    }
+    inline void SetPktSize(CNetPacket* p, uint32 s) {
+        memcpy(reinterpret_cast<uint8*>(p) + g_packetLayout.sizeOff, &s, sizeof(s));
+    }
+
 
     // ── Packet layout ──────────────────────────────────────────
     inline bool UnpackRaw(const uint8* data, uint32 size,
                           EMsg& eMsg, const uint8*& pHdr, uint32& cbHdr,
                           const uint8*& pBody, uint32& cbBody)
     {
-        if (!data || size < sizeof(MsgHdr)) {
+        // 上限对齐包池假设（收发两条替换路径都按 kMaxPacketSize 开池）：
+        // 野 size 直接拒，绝不往下算偏移读内存。
+        if (!data || size < sizeof(MsgHdr) || size > kMaxPacketSize) {
         fail:
             eMsg = static_cast<EMsg>(0);
             cbHdr = 0;
@@ -94,15 +167,15 @@ namespace {
         if (newSize > sizeof(g_RecvPacketPool[0])) return;
 
         uint8* buf = g_RecvPacketPool[g_RecvPacketPoolIdx];
-        const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(p->m_pubData);
+        const MsgHdr* orig = reinterpret_cast<const MsgHdr*>(PktData(p));
         MsgHdr* out = reinterpret_cast<MsgHdr*>(buf);
         out->eMsg         = orig->eMsg;
         out->headerLength = cbNewHdr;
         memcpy(buf + sizeof(MsgHdr), pNewHdr, cbNewHdr);
         if (cbNewBody)
             memcpy(buf + sizeof(MsgHdr) + cbNewHdr, pNewBody, cbNewBody);
-        p->m_pubData = buf;
-        p->m_cubData = newSize;
+        SetPktData(p, buf);
+        SetPktSize(p, newSize);
 
         g_RecvPacketPoolIdx = (g_RecvPacketPoolIdx + 1) % kPacketPoolSize;
     }
@@ -918,13 +991,13 @@ namespace Hooks_NetPacket_RichPresence {
         if (!g_InjectPending || g_cbInjectPkt == 0) return;
         g_InjectPending = false;
 
-        uint8* origData = pCarrier->m_pubData;
-        uint32 origSize = pCarrier->m_cubData;
-        pCarrier->m_pubData = g_InjectPkt;
-        pCarrier->m_cubData = g_cbInjectPkt;
+        uint8* origData = PktData(pCarrier);
+        uint32 origSize = PktSize(pCarrier);
+        SetPktData(pCarrier, g_InjectPkt);
+        SetPktSize(pCarrier, g_cbInjectPkt);
         invokeOriginal(pThis, pCarrier);
-        pCarrier->m_pubData = origData;
-        pCarrier->m_cubData = origSize;
+        SetPktData(pCarrier, origData);
+        SetPktSize(pCarrier, origSize);
         LOG_RICHPRESENCE_INFO("Delivered manufactured self-PersonaState ({} bytes)", g_cbInjectPkt);
     }
 
@@ -1233,13 +1306,13 @@ namespace Hooks_NetPacket_Cloud {
                 g_pending.pop_front();
             }
 
-            uint8* origData = pCarrier->m_pubData;
-            uint32 origSize = pCarrier->m_cubData;
-            pCarrier->m_pubData = pkt.data();
-            pCarrier->m_cubData = static_cast<uint32>(pkt.size());
+            uint8* origData = PktData(pCarrier);
+            uint32 origSize = PktSize(pCarrier);
+            SetPktData(pCarrier, pkt.data());
+            SetPktSize(pCarrier, static_cast<uint32>(pkt.size()));
             invokeOriginal(pThis, pCarrier);
-            pCarrier->m_pubData = origData;
-            pCarrier->m_cubData = origSize;
+            SetPktData(pCarrier, origData);
+            SetPktSize(pCarrier, origSize);
             LOG_NETPACKET_DEBUG("Cloud: delivered {}-byte response", pkt.size());
         }
     }
@@ -1328,13 +1401,13 @@ namespace Hooks_NetPacket_LegacyKey {
                 g_pending.pop_front();
             }
 
-            uint8* origData = pCarrier->m_pubData;
-            uint32 origSize = pCarrier->m_cubData;
-            pCarrier->m_pubData = pkt.data();
-            pCarrier->m_cubData = static_cast<uint32>(pkt.size());
+            uint8* origData = PktData(pCarrier);
+            uint32 origSize = PktSize(pCarrier);
+            SetPktData(pCarrier, pkt.data());
+            SetPktSize(pCarrier, static_cast<uint32>(pkt.size()));
             invokeOriginal(pThis, pCarrier);
-            pCarrier->m_pubData = origData;
-            pCarrier->m_cubData = origSize;
+            SetPktData(pCarrier, origData);
+            SetPktSize(pCarrier, origSize);
             LOG_NETPACKET_DEBUG("LegacyKey: delivered {}-byte response", pkt.size());
         }
     }
@@ -1564,6 +1637,11 @@ namespace {
 
     HOOK_FUNC(RecvPkt, void*, void* pThis, CNetPacket* pPacket)
     {
+        // 布局没认出来之前整个收包路径都是盲的：Drain 们借 pCarrier 指针玩的
+        // 也是同一对字段。认不出就直接过原函数，一个字节都不碰。
+        if (!EnsurePacketLayout(pPacket))
+            return oRecvPkt(pThis, pPacket);
+
         Hooks_NetPacket_RichPresence::TryInject(
             pThis, pPacket,
             [](void* pT, CNetPacket* pP) -> bool { return oRecvPkt(pT, pP) != nullptr; });
@@ -1579,7 +1657,7 @@ namespace {
         EMsg eMsg;
         const uint8 *pBody, *pHdr;
         uint32 cbBody, cbHdr;
-        if (UnpackRaw(pPacket->m_pubData, pPacket->m_cubData,
+        if (UnpackRaw(PktData(pPacket), PktSize(pPacket),
                      eMsg, pHdr, cbHdr, pBody, cbBody)) {
             g_ResizedInPlace = false;
             RecvJob(eMsg, pBody, cbBody, pHdr, cbHdr);
@@ -1590,7 +1668,7 @@ namespace {
                     g_NewHdr, g_cbNewHdr,
                     pBody, g_NewBodySize);
             } else if (g_ResizedInPlace) {
-                pPacket->m_cubData = sizeof(MsgHdr) + cbHdr + g_NewBodySize;
+                SetPktSize(pPacket, sizeof(MsgHdr) + cbHdr + g_NewBodySize);
             } else if (g_NeedReplaceHdr || g_NeedReplaceBody) {
                 ReplaceRecvPacket(pPacket,
                     g_NeedReplaceHdr  ? g_NewHdr  : pHdr,
