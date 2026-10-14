@@ -161,9 +161,11 @@ bool InitializeSteamComponents()
     // 副本加载失败很可能是 Steam 自更新中途拷出的撕裂文件，删掉重拷一次再试；
     // 还不行才回退原版并大声告警——静默回退等于安静裸奔。
     client_hModule = nullptr;
-    // 隔离总开关：Steam 不走劫持路径要 steamclient 时 adoption 等不来，
-    // 副本造出来也没人用，还多一次全量拷贝，所以默认直连原版（=1.5.2.1 行为）。
-    // 早注可用时打开这里即可，后面全按 g_IsDiversionActive 自动走，不用动别处。
+    // 隔离总开关：先关着，直连原版。1791 的 Steam 不走劫持路径要 steamclient，
+    // 开了也换不上，白白多一次全量拷贝；等哪天能早注（或 Steam 改回去）再开。
+    // 对照过 mmxlyo 的实现：同一种劫持、无 fallback、无 LoadLibrary 兜底，
+    // 在 1791 上他们的副本同样换不上去。回退是保解锁必须的，不能学他们删——
+    // 所以开关只管副本造不造，看门狗/回退/首载守卫的逻辑一个没动。
     constexpr bool kDiversionEnabled = false;
     // 只有"确认最新"或"刚拷成功"的副本才值得信任；拷都拷不出来就别碰旧文件，
     // 直接回退原版（陈旧副本不可信）。

@@ -118,8 +118,7 @@ addtoken(1361510,"2764735786934684318") -- 为 appid 为 1361510 的游戏添加
 -- 不再支持：
 --pinApp(1361510) -- 固定 appid 为 1361510 的游戏以防止其被更新
 
-setManifestid(1361511,"5656605350306673283") -- 固定 depotid:1361511 manifest_gid:5656605350306673283，大小默认为 0
-setManifestid(1361511,"5656605350306673283", 12345678) -- 同上，但指定明确大小
+setManifestid(1361511,"5656605350306673283") -- 固定 depotid:1361511 manifest_gid:5656605350306673283（只取前两个参数，多余的忽略）
 
 setAppTicket(1361510,"0100000000000000...") -- 将 AppTicket 写入凭据存储；在 Windows 上：HKCU\Software\Valve\Steam\Apps\1361510\AppTicket
 
@@ -127,6 +126,18 @@ setETicket(1361510,"0100000000000000...") -- 将 ETicket 写入凭据存储；�
 
 setStat(1361510, "76561197960287930") -- 使用指定 SteamID 的成就数据用于 appid 1361510
 -- 若未配置，启用时使用 stats API；否则使用默认 SteamID 76561198028121353
+
+setlegacycdkey(1361510, "XXXXX-XXXXX-XXXXX") -- 第三方老游戏 CD-Key 覆盖，原样存入
+
+dauth2(2638890) -- 该游戏 Denuvo 授权切长租约（启动 2500ms + 票 3000ms）；启动验证慢、报 88500012/54 的游戏用，默认短脉冲即可
+
+nodenuvo(1361510) -- 该游戏跳过 Denuvo 识别与授权（误识别的普通游戏用）；disallowdenuvo 同义
+forcedenuvo(1361510) -- 强制按 Denuvo 游戏走识别与授权（识别漏掉的硬核游戏用）；启动参数 -dauth2/-nodenuvo/-forcedenuvo 同效
+
+-- 内建 HTTP（给自建 manifest/eticket 接口用）：返回 body, status_code 两个值
+-- headers 可选，表格式，如 {["Accept"]="application/json"}
+local body, code = http_get("https://example.com/api", {["Accept"]="application/json"})
+local body, code = http_post("https://example.com/api", "post_body")
 ```
 
 所有函数名**不区分大小写**。`setAppTicket`、`setappticket`、`SetAppticket`、`SETAPPTICKET` 等都是等价的。每个注册的函数都适用（`addAppId`、`AddToken`、`SETManifestid` 等）。
