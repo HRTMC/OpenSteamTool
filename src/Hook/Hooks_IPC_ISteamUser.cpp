@@ -1,7 +1,9 @@
 #include "Hooks_IPC.h"
 #include "Hooks_IPC_ISteamUser.h"
+#include "Hook/Hooks_Package.h"
 #include "PendingAPICalls.h"
 #include "Utils/Tickets/AppTicket.h"
+#include "Utils/Config/LuaConfig.h"
 #include "Pipe/PipeManager.h"
 #include "Pipe/Features/DenuvoAuth/DenuvoAuth.h"
 #include "Utils/Logging/Log.h"
@@ -16,6 +18,10 @@ namespace {
         AppId_t appId = Hooks_Misc::ResolveAppId();
         GetSteamIDResp resp{pWrite};
         if (!resp.ok()) return;
+
+        // 真拥有和家庭共享的游戏：SteamID 一个字符都不碰，除非显式配了 dauth2。
+        // 否则存档目录和云存档全跑到池子账号下，还可能触发 88500012。
+        if (Hooks_Package::HasValidLicense(appId) && !LuaConfig::IsDAuth2(appId)) return;
 
         if (!PipeManager::DenuvoAuth::IsAuthorizedPipe(pipe)) {
             LOG_IPC_TRACE("IClientUser::GetSteamID: AppId={} not in authorization window, skip spoofing", appId);
@@ -80,7 +86,7 @@ namespace {
         resp.set_pcbSignature(ticket.signatureSize);
 
         // 票已交付：延长 Denuvo 授权租约，盖住随即的 memcmp(Ticket->SteamID, GetSteamID()) 交叉验证。
-        PipeManager::DenuvoAuth::OnOwnershipTicketRequested(pipe);
+        PipeManager::DenuvoAuth::OnOwnershipTicketRequested(pipe, appId);
 
         LOG_IPC_DEBUG("IClientUser::GetAppOwnershipTicketExtendedData: AppId={} {}",
                         appId,resp.DebugString());
@@ -103,6 +109,7 @@ namespace {
 
         const SteamAPICall_t hAsyncCall = resp.returnValue();
         PendingAPICalls::RecordEncryptedTicket(hAsyncCall, appId);
+        PipeManager::DenuvoAuth::OnEncryptedTicketRequested(pipe, appId);
         LOG_IPC_DEBUG("RequestEncryptedAppTicket: AppId={} hAsyncCall=0x{:X} - recorded",
                       appId, hAsyncCall);
     }
@@ -131,6 +138,8 @@ namespace {
         resp.set_pcbTicket(ticketSize);
         if (!resp.set_pTicket(ticket)) return;
 
+        // 票字节交到 Denuvo 手里：开 2500ms 投递脉冲，盖住 VM 加密运算和二次验证 burst。
+        PipeManager::DenuvoAuth::OnEncryptedTicketDelivered(pipe, appId);
         LOG_IPC_DEBUG("GetEncryptedAppTicket: AppId={} {}", appId, resp.DebugString());
     }
 
