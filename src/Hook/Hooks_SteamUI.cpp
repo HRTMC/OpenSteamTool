@@ -156,9 +156,9 @@ namespace
         if (g_bypassFirstLoadRedirect.load(std::memory_order_acquire)) return nullptr;
         if (!g_IsDiversionActive.load() || !client_hModule) return nullptr;
         if (!IsSteamClientPathW(lpLibFileName)) return nullptr;
-        // 真·首载语义：原版已经在内存里，这次就是重复请求，直接放行拿原版。
+        // 首载语义：原版已经在内存里，这次就是重复请求，直接放行拿原版。
         // 不然（比如我们来晚了、启动期那次没抢到）就会造出“主 client 跑原版、
-        // 某个后来者拿副本”的分裂世界，还顺手把 adopted 置了压住回退，解锁全灭。
+        // 某个后来者拿副本”的分裂世界，还会把 adopted 置了压住回退，解锁全灭。
         // GetModuleHandle 只是读 PEB，loader lock 下调安全。
         if (GetModuleHandleW(lpLibFileName) || GetModuleHandleW(L"steamclient64.dll"))
             return nullptr;

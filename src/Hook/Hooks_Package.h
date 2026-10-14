@@ -16,11 +16,6 @@ namespace Hooks_Package {
     // 只生效一次，避免循环。正常路径（自然查询不断）不受影响。
     void RequestRequeryOnce();
 
-    // 构建门禁结论（和 CheckAppOwnership 里拦注入用的是同一份白名单）：
-    // 看门狗和 CoreHook 都用它——白名单外的构建注入本来就会被拦掉，
-    // 回退搬家除了崩溃什么也换不来，直接跳过；client hook 整个不装。
-    bool IsVerifiedClientBuild();
-
     // 当前账号是否有该 App 的家庭共享许可（CheckAppOwnership 见过 bFamilyShared/bBorrowed）。
     bool IsSharedLicense(AppId_t appId);
 

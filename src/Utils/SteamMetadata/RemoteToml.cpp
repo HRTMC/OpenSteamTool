@@ -13,7 +13,7 @@
 namespace RemoteToml {
 
 namespace {
-    // 签名源：hazre/steam-monitor（15 分钟自动采集 stable+beta 并发布，文件更全）。
+    // 签名源：hazre/steam-monitor（定时采集 stable+beta，文件更全）。
     // 与 OpenSteam001 版布局差异：channel 不是分支而是 main 下的目录，
     // 因此分支固定 main，{channel} 走路径段——占位符集合不变，模板机制兼容。
     constexpr const char* kGithubTemplate =

@@ -60,13 +60,12 @@ namespace {
     }
 
     // ── CNetPacket 字段自适应 ─────────────────────────────
-    // 我在 1791 上实测：CNetPacket 的内存布局变了，还按 1788 的偏移 (+8/+16)
-    // 读 m_pubData 拿到野指针，UnpackRaw 里直接崩（四次 dump 全是这个形状）。
-    // 注意收包路径的 pubData 不是直接参数，是从包对象里按偏移抠出来的——
-    // 发包路径的 pubData 是 Steam 直接传进来的，所以发包解析一直正常。
-    // Valve 改一次布局我就得跟一次——改成运行时自适应：拿 pPacket 按候选偏移扫，
+    // 收包路径的 pubData 不是直接参数，是从包对象里按偏移抠出来的；
+    // 新构建一改包对象布局，旧偏移抠出来的就是野指针，UnpackRaw 里直接崩。
+    // 所以改成运行时自适应：拿 pPacket 按候选偏移扫，
     // 找满足“指针可读 + 头 4 字节带 proto 标志 + 长度合理”的 (data,len) 对，
-    // 找到就缓存本会话。找不到就直通，绝不碰。1788 走 legacy 偏移一次命中，行为不变。
+    // 找到就缓存本会话。找不到就直通，绝不碰。
+    // legacy 偏移放第一位：已验证构建一次命中，热路径零影响。
     struct PacketFieldLayout { uint32 dataOff = 8; uint32 sizeOff = 16; };
     static PacketFieldLayout g_packetLayout;
     static std::atomic<bool> g_packetLayoutReady{false};
@@ -95,10 +94,10 @@ namespace {
         if (!p) return false;
         std::lock_guard<std::mutex> lock(g_packetLayoutMutex);
         if (g_packetLayoutReady.load(std::memory_order_relaxed)) return true;
-        // legacy 优先：1788 一次命中，热路径零影响；1791 顺移的布局也能被扫出来。
+        // legacy 优先：已验证构建一次命中；顺移后的新布局由候选位扫出来。
         static const uint32 kDataOffCandidates[] = {8, 16, 24, 32, 40};
         for (const uint32 dOff : kDataOffCandidates) {
-            const uint32 sOff = dOff + 8;  // len 紧跟 ptr（1788 布局 +8/+16，新布局同理顺移）
+            const uint32 sOff = dOff + 8;  // len 紧跟 ptr，和编码进默认值的 legacy 配对一致
             if (ProbePacketFields(p, dOff, sOff)) {
                 g_packetLayout.dataOff = dOff;
                 g_packetLayout.sizeOff = sOff;

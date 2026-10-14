@@ -103,9 +103,4 @@ void ShowWarning(std::string title, std::string message)
     }).detach();
 }
 
-const std::string& SteamClientSha256()
-{
-    return g_snapshot.steamclientSha256;
-}
-
 } // namespace SteamDiagnostics

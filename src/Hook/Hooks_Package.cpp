@@ -22,7 +22,7 @@ namespace {
     bool  g_licenseRefreshPending = false;
     // 回退自举一次性标志：看门狗线程置位，Steam IPC 线程消费（原子，跨线程）。
     std::atomic<bool> g_forceRequeryOnce{false};
-    // 注入熔断：注入路径崩过一次就永久停注本会话（游戏顶多不解锁，Steam 活着）。
+    // 注入熔断：异常触发即永久停注本会话（游戏顶多不解锁，Steam 活着）。
     std::atomic<bool> g_injectDisabled{false};
     static DWORD g_injectExCode = 0;
     static void* g_injectExAddr = nullptr;
@@ -132,32 +132,9 @@ namespace {
     // 崩一次就记码记地址、永久停注本会话（游戏顶多不解锁，Steam 活着 + 日志可查）。
 } // namespace
 
-// 构建门禁：只在验证过的 steamclient 构建上注入（fail-closed）。
-// 我的内存读写按硬编码结构体偏移来，新构建一漂移就是堆破坏+闪退；
-// 与其崩，不如在新构建上直接关注入（游戏不解锁但 Steam 活着），等核对完偏移再加白。
-// 白名单判一次就够，sha 跑起来不会变，static 缓存。
-bool Hooks_Package::IsVerifiedClientBuild() {
-        static const char* kVerifiedShas[] = {
-            "caba4826aa3501039d095aee1843a6bfb270fb43a3ab4455b2d6733223579fee", // 1788652215，跑过完整会话
-            "e9045710ec7ee47d7b7488d1c5dda2d933dec7e251e965967a5c48f4df68eb4e", // 1791，试跑验证中：布局是否漂移未知，先放行看崩不崩
-        };
-        static const bool allowed = [&] {
-            const std::string& sha = SteamDiagnostics::SteamClientSha256();
-            for (const char* known : kVerifiedShas) {
-                if (sha == known) return true;
-            }
-            LOG_PACKAGE_ERROR("CheckAppOwnership: unverified steamclient build (sha={}), license injection disabled for session",
-                              sha.empty() || sha[0] == '(' ? sha : sha.substr(0, 12));
-            return false;
-        }();
-        return allowed;
-}
-
 namespace {
 
     static bool CheckAppOwnershipBody(void* pObj, AppId_t appId, AppOwnership* pOwn, bool result) {
-        if (!Hooks_Package::IsVerifiedClientBuild()) return result;
-
         if (!g_pCUser) {
             g_pCUser = pObj;
             LOG_PACKAGE_DEBUG("CheckAppOwnership: captured CUser {}", g_pCUser);

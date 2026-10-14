@@ -45,6 +45,12 @@ static std::unordered_set<OSTPlatform::DynamicLibrary::ModuleHandle> g_failedMod
 // functions whose names were not found during FindPattern
 static std::vector<std::string> g_missingFunctions;
 
+// 各模块 Load() 时的请求（给缺条目自愈用：见 FindPattern）。
+static std::unordered_map<OSTPlatform::DynamicLibrary::ModuleHandle, RemoteToml::Request> g_moduleReqs;
+
+// 本会话已刷新过的模块（只一次；刷完还缺就是上游真没有，走正常缺失上报）。
+static std::unordered_set<OSTPlatform::DynamicLibrary::ModuleHandle> g_refreshedModules;
+
 // ---- byte-pattern scanner ----
 
 static bool ParseSig(const std::string& str,
@@ -196,6 +202,7 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
         LOG_INFO("PatternLoader: loaded {} patterns for {} ({})",
                  map.size(), component, r.fromCache ? "cache" : "remote");
         g_moduleMaps[module] = std::move(map);
+        g_moduleReqs[module] = req;
         return true;
     }
 
@@ -211,6 +218,7 @@ bool Load(OSTPlatform::DynamicLibrary::ModuleHandle module, const std::string& d
             LOG_INFO("PatternLoader: self-heal ok, loaded {} patterns for {} ({})",
                      map.size(), component, r.fromCache ? "cache" : "remote");
             g_moduleMaps[module] = std::move(map);
+            g_moduleReqs[module] = req;
             return true;
         }
     } else if (!r.ok) {
@@ -250,6 +258,38 @@ void* FindPattern(OSTPlatform::DynamicLibrary::ModuleHandle module, const char* 
 
     auto& map = mapIt->second;
     auto entryIt = map.find(key);
+    if (entryIt == map.end()) {
+        // 子集缓存自愈：同一 sha 的签名文件会被上游补全，缓存按 sha 当不可变存着，
+        // 不刷就会一直缺同一批函数。每个模块每会话只刷一次：刷完还缺就是上游真没有，
+        // 走正常缺失上报。
+        // 注意这里跑在 Install 阶段里（调用方就是装 hook 的），刷完直接继续查，
+        // 补回来的条目同一次就能装上，不用等下次启动。
+        // 这次重抓发生在装 hook 的事务窗口里，慢，但每模块每会话只走一次。
+        if (!g_refreshedModules.count(module)) {
+            g_refreshedModules.insert(module);
+            const auto reqIt = g_moduleReqs.find(module);
+            if (reqIt != g_moduleReqs.end()) {
+                LOG_WARN("PatternLoader: '{}' not in cached spec, dropping possibly-stale subset and refetching once",
+                         funcName);
+                RemoteToml::Invalidate(reqIt->second);
+                RemoteToml::Result r = RemoteToml::Fetch(reqIt->second);
+                if (r.ok) {
+                    std::string refreshErr;
+                    PatternMap fresh = ParsePatternString(r.body, &refreshErr);
+                    // 非空才算数：空/坏继续用旧 map（总比没有强）。
+                    if (!fresh.empty()) {
+                        LOG_INFO("PatternLoader: subset refresh ok, {} -> {} entries ({})",
+                                 map.size(), fresh.size(), r.fromCache ? "cache" : "remote");
+                        map = std::move(fresh);
+                        entryIt = map.find(key);
+                    } else {
+                        LOG_WARN("PatternLoader: subset refresh parsed empty ({}), keeping old map",
+                                 refreshErr.empty() ? "no entries" : refreshErr);
+                    }
+                }
+            }
+        }
+    }
     if (entryIt == map.end()) {
         LOG_WARN("PatternLoader: no entry for '{}' (key=0x{:08X})", funcName, key);
         g_missingFunctions.emplace_back(funcName);

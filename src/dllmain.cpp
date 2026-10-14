@@ -22,10 +22,9 @@ namespace {
 constexpr int kDiversionCopyRetries = 3;
 constexpr std::chrono::milliseconds kDiversionCopyRetryDelay{50};
 
-// DllMain 里记一笔：我们进进程时 steamclient64 是否已经在内存了。
-// 是 = 来晚了，首载抢劫不可能生效（Steam 不会再 Load 第二次），日志里直接判死刑；
-// 否 = 首载还没发生，FirstLoadRedirect 有机会抢。GetModuleHandle 只是读 PEB，
-// loader lock 下调安全。StartDetached 建线程自带 happens-before，直接读就行。
+// 我们进进程时 steamclient64 是否已在内存，决定首载抢劫有没有机会：
+// 在 = 来晚了，Steam 不会再 Load 第二次；不在 = 首载还没发生。
+// GetModuleHandle 只是读 PEB，loader lock 下调安全；建线程自带 happens-before，直接读就行。
 bool g_steamClientMappedAtAttach = false;
 
 bool IsDiversionUpToDate() {
@@ -90,12 +89,12 @@ static bool FallbackToOriginalSteamClient(bool clientHooksArmed) {
     if (clientHooksArmed) SteamClient::CoreUnhook();
     // 注意：绝不 FreeLibrary diversion 副本！cloud_redirect 初始化时经
     // GetModuleHandle 拿到副本句柄做地址解析 + vtable patch，存的全是绝对地址；
-    // 一旦卸载，下一次 stats/cloud RPC 就踩野指针崩溃（已实测：回退 12 秒后死）。
+    // 一旦卸载，下一次 stats/cloud RPC 就踩野指针崩溃，所以副本只废弃不卸载。
     // 副本废弃但保持映射（多一个模块映射的代价），hook 已卸、谁也不会再用它，安全。
     // client_hModule 直接指向原版，后续劫持分发与查询重定向全走原版，全程一致。
-    // 注意：回退后整个会话是原版世界，首载抢劫必须永久 bypass——不然之后谁再
-    // LoadLibrary(steamclient) 会拿到副本，两套 client 并存直接精神分裂。
-    // 所以这里只开不开（连 fallback 自己的这次 Load 也顺手放行了）。
+    // 注意：回退后整个会话是原版世界，首载抢劫必须永久 bypass，不然之后再有人
+    // LoadLibrary(steamclient) 会拿到副本，两套 client 并存状态错乱。
+    // 这里只开不开：连 fallback 自己的这次 Load 也一并放行。
     Hooks_SteamUI::SetFirstLoadRedirectBypass(true);
     client_hModule = OSTPlatform::DynamicLibrary::Load(SteamclientPath);
     g_IsDiversionActive.store(false);
@@ -136,15 +135,6 @@ static uint32_t DiversionWatchdog() {
         if (!g_HooksInstalled.load()) return 0;
     }
     if (!g_IsDiversionActive.load() || g_DiversionAdopted.load()) return 0;
-    // 白名单外的构建直接跳过运行时回退：注入和 client hook 本来就会被门禁拦掉，
-    // 回退搬家除了风险什么也换不来。已验证构建不受影响，照样回退保解锁。
-    if (!Hooks_Package::IsVerifiedClientBuild()) {
-        LOG_WARN("Diversion: Steam did not adopt the diversion module within {}s, "
-                 "but license injection is disabled for this steamclient build — "
-                 "skipping runtime fallback (no unlock to save, avoiding known crash)",
-                 static_cast<int>(kDiversionAdoptTimeout.count()));
-        return 0;
-    }
     LOG_WARN("Diversion: Steam did not adopt the diversion module within {}s "
              "(still using startup-loaded original), falling back to original steamclient64",
              static_cast<int>(kDiversionAdoptTimeout.count()));
@@ -171,13 +161,20 @@ bool InitializeSteamComponents()
     // 副本加载失败很可能是 Steam 自更新中途拷出的撕裂文件，删掉重拷一次再试；
     // 还不行才回退原版并大声告警——静默回退等于安静裸奔。
     client_hModule = nullptr;
+    // 隔离总开关：Steam 不走劫持路径要 steamclient 时 adoption 等不来，
+    // 副本造出来也没人用，还多一次全量拷贝，所以默认直连原版（=1.5.2.1 行为）。
+    // 早注可用时打开这里即可，后面全按 g_IsDiversionActive 自动走，不用动别处。
+    constexpr bool kDiversionEnabled = false;
     // 只有"确认最新"或"刚拷成功"的副本才值得信任；拷都拷不出来就别碰旧文件，
     // 直接回退原版（陈旧副本不可信）。
-    bool diversionFileUsable = IsDiversionUpToDate();
-    if (diversionFileUsable) {
-        LOG_DEBUG("Diversion module is already up to date ({}), skipping copy", DiversionPath);
-    } else {
-        diversionFileUsable = CopySteamClientToDiversion();
+    bool diversionFileUsable = false;
+    if (kDiversionEnabled) {
+        diversionFileUsable = IsDiversionUpToDate();
+        if (!diversionFileUsable) {
+            diversionFileUsable = CopySteamClientToDiversion();
+        } else {
+            LOG_DEBUG("Diversion module is already up to date ({}), skipping copy", DiversionPath);
+        }
     }
     if (diversionFileUsable) {
         client_hModule = OSTPlatform::DynamicLibrary::Load(DiversionPath);
@@ -285,8 +282,9 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
     g_HooksInstalled.store(true);
     LOG_INFO("OpenSteamTool init complete ({})",
              g_IsDiversionActive.load() ? "Diversion active" : "Diversion bypassed, using original steamclient64");
-    // 超时回退看门狗：detached 一次性，60s 后检查 Steam 是否换到副本上。
-    OSTPlatform::Thread::StartDetached([] { return DiversionWatchdog(); });
+    // 超时回退看门狗：只在隔离启用时才有事可做，直连原版时不启线程。
+    if (g_IsDiversionActive.load())
+        OSTPlatform::Thread::StartDetached([] { return DiversionWatchdog(); });
     return 0;
 }
 
