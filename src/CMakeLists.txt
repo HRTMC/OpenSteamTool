@@ -187,3 +187,12 @@ add_library(xinput1_4 SHARED
     xinput1_4/xinput1_4.cpp
     xinput1_4/xinput1_4.def
 )
+
+# ---------------------------------------------------------------------------
+# version.dll hijack — loader-stage agent. steam.exe statically imports
+# VERSION.dll, so this proxy gets OpenSteamTool into the process before
+# steam.exe first loads steamclient64.dll (first-load redirect head start).
+# ---------------------------------------------------------------------------
+add_library(version SHARED
+    version/version.cpp
+)

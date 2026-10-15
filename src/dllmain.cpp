@@ -161,12 +161,10 @@ bool InitializeSteamComponents()
     // 副本加载失败很可能是 Steam 自更新中途拷出的撕裂文件，删掉重拷一次再试；
     // 还不行才回退原版并大声告警——静默回退等于安静裸奔。
     client_hModule = nullptr;
-    // 隔离总开关：先关着，直连原版。1791 的 Steam 不走劫持路径要 steamclient，
-    // 开了也换不上，白白多一次全量拷贝；等哪天能早注（或 Steam 改回去）再开。
-    // 对照过 mmxlyo 的实现：同一种劫持、无 fallback、无 LoadLibrary 兜底，
-    // 在 1791 上他们的副本同样换不上去。回退是保解锁必须的，不能学他们删——
-    // 所以开关只管副本造不造，看门狗/回退/首载守卫的逻辑一个没动。
-    constexpr bool kDiversionEnabled = false;
+    // 隔离总开关。version.dll 代理把注入提前到 Steam 首载 steamclient 之前，
+    // 首载抢劫（FirstLoadRedirect）才有窗口可抢；晚到的注入开着也换不上，
+    // 看门狗到点自动回退原版保解锁。开关只管副本造不造，回退与守卫逻辑常驻。
+    constexpr bool kDiversionEnabled = true;
     // 只有"确认最新"或"刚拷成功"的副本才值得信任；拷都拷不出来就别碰旧文件，
     // 直接回退原版（陈旧副本不可信）。
     bool diversionFileUsable = false;
@@ -229,6 +227,11 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
         return 1;
     }
 
+    // 首载抢劫即刻武装：只依赖 kernel32，与 pattern/SteamUI hook 无依赖，
+    // 越早装上抢到 Steam 主线程首次 LoadLibrary(steamclient) 的窗口越大。
+    if (g_IsDiversionActive.load())
+        Hooks_SteamUI::InstallFirstLoadRedirect();
+
     Config::Load(ConfigPath);
     Log::InitModules();
     Log::InstallPlatformLogSink();
@@ -243,16 +246,14 @@ static uint32_t InitThread(OSTPlatform::DynamicLibrary::ModuleHandle selfModule)
 
     // SteamUI hook 先装：LoadModuleWithPath 劫持必须在 Steam 自己加载
     // steamclient 之前就位，它内部会等 g_HooksInstalled 屏障再放行。
+    // （首载抢劫已在 InitializeSteamComponents 后就位，见上。）
     SteamUI::CoreHook();
 
-    // 首载抢劫（1791 隔离修复）：diversion 就绪的前提下把 kernel32 首载也挂上，
-    // 抢到就是隔离生效；来晚了它自然打空，不影响现有流程。
-    if (g_IsDiversionActive.load())
-        Hooks_SteamUI::InstallFirstLoadRedirect();
-
-    // 如果劫持没装上（pattern 缺失），影子模块就是没人用的摆设——
-    // 此时必须换回原版再装 client hook，否则解锁静默全灭。
-    if (g_IsDiversionActive.load() && !Hooks_SteamUI::IsDiversionRedirectArmed()) {
+    // 两条换机路径任一可用就不回退：LoadModuleWithPath 劫持（老路径）或
+    // 首载抢劫（1791 路径）；两条都没了影子模块才是没人用的摆设，必须
+    // 换回原版再装 client hook，否则解锁静默全灭。
+    if (g_IsDiversionActive.load() && !Hooks_SteamUI::IsDiversionRedirectArmed() &&
+        !Hooks_SteamUI::IsFirstLoadRedirectArmed()) {
         LOG_WARN("Diversion redirect unavailable (LoadModuleWithPath pattern missing), "
                  "falling back to original steamclient64 — unlock keeps working, isolation disabled");
         if (!FallbackToOriginalSteamClient(false)) {

@@ -16,7 +16,13 @@ namespace Hooks_SteamUI {
     // 首载抢劫（1791）：Steam 不再走 LoadModuleWithPath 拿 steamclient，
     // 而是启动期直接 LoadLibraryExW。diversion 就绪后把 kernel32 的首载也挂上，
     // 抢到就是隔离生效；来晚了（首载已发生）它自然打空，不影响现有流程。
+    // 顺带罩住 GetProcAddress：晚绑定取原版导出的一律改道副本，默认透传。
     void InstallFirstLoadRedirect();
+
+    // 首载抢劫是否已武装（kernel32 LoadLibrary hook 是否装上）。
+    // 与 IsDiversionRedirectArmed 合起来判断"隔离是否还有换机路径"：
+    // 两条路都没了才该回退原版。
+    bool IsFirstLoadRedirectArmed();
 
     // 我们自己要 Load 原版时（回退）必须短暂 bypass，不然 Load 会被劫回副本。
     void SetFirstLoadRedirectBypass(bool bypass);
