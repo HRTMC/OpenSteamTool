@@ -65,19 +65,19 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.version }}
           body: |
-            ## Changes
+            ## 更新内容
 
             ${{ steps.changelog.outputs.changelog }}
 
-            ## Installation
+            ## 安装方法
 
-            Download `OpenSteamTool-${{ github.event.inputs.version }}-Release.zip` (or the `-Debug` variant if you need logging to `<steam>/opensteamtool directory`).
+            下载 `OpenSteamTool-${{ github.event.inputs.version }}-Release.zip`（如需 `<steam>/opensteamtool` 目录下的运行日志，请下载 `-Debug` 版本）。
 
-            Extract and copy `version.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to your Steam root directory (e.g. `C:\Program Files (x86)\Steam`).
+            解压并将 `version.dll`、`xinput1_4.dll` 和 `OpenSteamTool.dll` 复制到 Steam 根目录（例如 `C:\Program Files (x86)\Steam`）。
 
-            If you previously deployed `dwmapi.dll` (Steam root or `bin` directory), delete it — it is retired and breaks current Steam startup (`VGUI_Setup failed`).
+            如果你之前部署过 `dwmapi.dll`（Steam 根目录或 `bin` 目录），请将其删除——它已退役，残留会导致新版 Steam 启动失败（`VGUI_Setup failed`）。
 
-            Create a Lua config directory (for example `C:\Program Files (x86)\Steam\config\lua`) and place your Lua scripts there. **NOT** `C:\Program Files (x86)\Steam\config\stplug-in`!
+            创建 Lua 配置目录（例如 `C:\Program Files (x86)\Steam\config\lua`）并将 Lua 脚本放在那里。**不要**放在 `C:\Program Files (x86)\Steam\config\stplug-in`！
           files: |
             OpenSteamTool-${{ github.event.inputs.version }}-Release.zip
             OpenSteamTool-${{ github.event.inputs.version }}-Debug.zip
