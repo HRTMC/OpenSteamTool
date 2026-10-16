@@ -145,10 +145,22 @@ static uint32_t DiversionWatchdog() {
 // prepare key runtime paths.
 bool InitializeSteamComponents()
 {
-    const std::string steamInstallPath = OSTPlatform::DynamicLibrary::GetCurrentDirectoryPath();
+    // Steam 根目录以宿主 exe 为准，不用 CWD：经外部工具拉起 steam.exe 时 CWD
+    // 是继承来的工具目录，用 CWD 会导致 steamclient64.dll 定位失败、整个 init
+    // 静默全灭（零 hook、解锁全灭）。steamclient64.dll 必定与 steam.exe 同目录，
+    // exe 路径才是唯一可信的锚点。
+    const std::filesystem::path exePath = OSTPlatform::DynamicLibrary::GetMainExecutablePath();
+    const std::string exeName = exePath.filename().string();
+    if (exeName.empty() || _stricmp(exeName.c_str(), "steam.exe") != 0) {
+        LOG_INFO("InitializeSteamComponents: host is not steam.exe ({}), skipping",
+                 exeName.empty() ? "(unknown)" : exeName);
+        return false;
+    }
+    const std::string steamInstallPath = exePath.parent_path().string();
     if (steamInstallPath.empty()) {
         return false;
     }
+    LOG_INFO("Steam install path: {} (host {})", steamInstallPath, exePath.string());
     sprintf_s(SteamInstallPath, kRuntimePathCapacity, "%s", steamInstallPath.c_str());
     sprintf_s(SteamclientPath, kRuntimePathCapacity, "%s\\steamclient64.dll",  SteamInstallPath);
     sprintf_s(SteamUIPath,     kRuntimePathCapacity, "%s\\steamui.dll",        SteamInstallPath);
