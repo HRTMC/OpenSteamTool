@@ -109,7 +109,8 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 ## Usage
 1. Run `build.bat` from the project root to build the project.
-2. Copy generated `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
+2. Copy generated `version.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
+> If you previously deployed `dwmapi.dll` (Steam root or `bin` directory), delete it — it is retired; leftovers break current Steam startup (`VGUI_Setup failed`).
 3. Create Lua directory (for example `C:\steam\config\lua`) and place Lua scripts there. The DLL will automatically load and execute them.
 4. Lua example:
 ```lua
@@ -282,8 +283,8 @@ build.bat
 ```
 
 ### Output
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
+- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/version.dll`, `build/Debug/xinput1_4.dll`
+- Release: `build/Release/OpenSteamTool.dll`, `build/Release/version.dll`, `build/Release/xinput1_4.dll`
 
 ## Disclaimer
 This project is provided for research and educational purposes only. You are responsible for complying with local laws, platform terms of service, and software licenses.

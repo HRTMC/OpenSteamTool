@@ -174,11 +174,12 @@ target_compile_definitions(OpenSteamTool PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# dwmapi.dll hijack — small loader DLL placed alongside Steam.
+# dwmapi.dll hijack — NOT built or shipped anymore.
+# Its static forwarders (DWMAPI.*) resolve to itself, so any official module
+# that statically imports dwmapi (e.g. bin\vgui2_s.dll -> DwmExtendFrameIntoClientArea)
+# fails to load (VGUI_Setup failed). version.dll covers this trigger path;
+# the source stays dormant under dwmapi/ in case a transparent rewrite is needed.
 # ---------------------------------------------------------------------------
-add_library(dwmapi SHARED
-    dwmapi/dwmapi.cpp
-)
 
 # ---------------------------------------------------------------------------
 # xinput1_4.dll hijack — secondary loader DLL placed alongside Steam.

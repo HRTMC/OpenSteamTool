@@ -105,7 +105,8 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 
 ## Uso
 1. Ejecuta `build.bat` desde la raíz del proyecto para compilarlo.
-2. Copia los archivos generados `dwmapi.dll`, `xinput1_4.dll` y `OpenSteamTool.dll` al directorio raíz de Steam.
+2. Copia los archivos generados `version.dll`, `xinput1_4.dll` y `OpenSteamTool.dll` al directorio raíz de Steam.
+> Si desplegaste `dwmapi.dll` anteriormente (en la raíz de Steam o en el directorio `bin`), elimínalo: está retirado y los restos impiden el inicio de las versiones actuales de Steam (`VGUI_Setup failed`).
 3. Crea un directorio para Lua (por ejemplo, C:\steam\config\lua) y coloca allí tus scripts de Lua. La DLL los cargará y ejecutará automáticamente.
 4. Ejemplo de Lua:
 ```lua
@@ -273,9 +274,9 @@ build.bat
 ```
 
 ### Archivos de salida
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`
+- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/version.dll`, `build/Debug/xinput1_4.dll`
 
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`
+- Release: `build/Release/OpenSteamTool.dll`, `build/Release/version.dll`, `build/Release/xinput1_4.dll`
 
 ## Descargo de responsabilidad
 Este proyecto se proporciona únicamente con fines de investigación y educativos. Eres responsable de cumplir con las leyes locales, los términos de servicio de la plataforma y las licencias de software correspondientes.
