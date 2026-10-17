@@ -55,10 +55,10 @@ jobs:
           git push origin ${{ github.event.inputs.version }}
 
       - name: Package Release
-        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Release.zip ".\build\Release\*" -mx5
+        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Release.zip ".\build\Release\*" '-x!*.lib' '-x!*.exp' '-x!*.pdb' '-x!*.ilk' -mx5
 
       - name: Package Debug
-        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Debug.zip ".\build\Debug\*" -mx5
+        run: 7z a OpenSteamTool-${{ github.event.inputs.version }}-Debug.zip ".\build\Debug\*" '-x!*.lib' '-x!*.exp' '-x!*.pdb' '-x!*.ilk' -mx5
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -73,9 +73,13 @@ jobs:
 
             下载 `OpenSteamTool-${{ github.event.inputs.version }}-Release.zip`（如需 `<steam>/opensteamtool` 目录下的运行日志，请下载 `-Debug` 版本）。
 
-            解压并将 `version.dll`、`xinput1_4.dll` 和 `OpenSteamTool.dll` 复制到 Steam 根目录（例如 `C:\Program Files (x86)\Steam`）。
+            解压并将 `dwmapi.dll`、`xinput1_4.dll` 和 `OpenSteamTool.dll` 复制到 Steam 根目录（例如 `C:\Program Files (x86)\Steam`）。
 
-            如果你之前部署过 `dwmapi.dll`（Steam 根目录或 `bin` 目录），请将其删除——它已退役，残留会导致新版 Steam 启动失败（`VGUI_Setup failed`）。
+            `dwmapi.dll` 是默认注入入口：由 `bin\vgui2_s.dll` 加载，不会被部分游戏的反作弊系统拦截，可正常游玩（如 EAC/BE 等）；缺点是部分校验 steamclient 的游戏会崩溃（如卡普空的鬼武者/龙信2 等）。
+
+            `version.dll.disabled` 是早注隔离专用入口，默认禁用（保留 `.disabled` 后缀即不加载），需要启用时去掉后缀改名回 `version.dll` 再重启 Steam：作为 steam.exe 静态导入在启动早期加载，具备隔离 steamclient 进行副本 hook 的能力，能解决部分游戏崩溃问题（如卡普空的鬼武者/龙信2 等）；缺点是会被部分游戏的反作弊系统拦截，无法游玩（如 EAC/BE 等）。
+
+            两个入口二选一，不要同时启用。
 
             创建 Lua 配置目录（例如 `C:\Program Files (x86)\Steam\config\lua`）并将 Lua 脚本放在那里。**不要**放在 `C:\Program Files (x86)\Steam\config\stplug-in`！
           files: |

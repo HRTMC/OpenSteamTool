@@ -173,14 +173,15 @@ bool InitializeSteamComponents()
     // 副本加载失败很可能是 Steam 自更新中途拷出的撕裂文件，删掉重拷一次再试；
     // 还不行才回退原版并大声告警——静默回退等于安静裸奔。
     client_hModule = nullptr;
-    // 隔离总开关。version.dll 代理把注入提前到 Steam 首载 steamclient 之前，
-    // 首载抢劫（FirstLoadRedirect）才有窗口可抢；晚到的注入开着也换不上，
-    // 看门狗到点自动回退原版保解锁。开关只管副本造不造，回退与守卫逻辑常驻。
-    constexpr bool kDiversionEnabled = true;
+    // 隔离总开关：只有抢在 steamclient 首载之前进入进程，首载抢劫才有窗口可抢。
+    // 到达时若 steamclient64 已在内存（dwmapi 经 vgui2_s 晚注），继续造副本也换不上，
+    // 看门狗只会空等超时再回退，白拷一份几十 MB 的副本。这种晚注场景直接不造副本、
+    // 不装首载重定向、不起看门狗，全程用原版。
+    const bool diversionEnabled = !g_steamClientMappedAtAttach;
     // 只有"确认最新"或"刚拷成功"的副本才值得信任；拷都拷不出来就别碰旧文件，
     // 直接回退原版（陈旧副本不可信）。
     bool diversionFileUsable = false;
-    if (kDiversionEnabled) {
+    if (diversionEnabled) {
         diversionFileUsable = IsDiversionUpToDate();
         if (!diversionFileUsable) {
             diversionFileUsable = CopySteamClientToDiversion();
@@ -210,8 +211,13 @@ bool InitializeSteamComponents()
                       SteamclientPath, OSTPlatform::DynamicLibrary::GetLastErrorCode());
             return false;
         }
-        LOG_WARN("Diversion inactive, loaded fallback steamclient64.dll from {} — hooks run on the original module, integrity-checked games may crash",
-                 SteamclientPath);
+        if (diversionEnabled) {
+            LOG_WARN("Diversion inactive, loaded fallback steamclient64.dll from {} — hooks run on the original module, integrity-checked games may crash",
+                     SteamclientPath);
+        } else {
+            LOG_INFO("Diversion skipped (arrived after steamclient64 first load), using original steamclient64.dll from {}",
+                     SteamclientPath);
+        }
     }
     
     ui_hModule = OSTPlatform::DynamicLibrary::Load(SteamUIPath);

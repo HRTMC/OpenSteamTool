@@ -105,8 +105,9 @@ La herramienta `extract_tickets` vuelca las cadenas hexadecimales de `AppTicket`
 
 ## Uso
 1. Ejecuta `build.bat` desde la raíz del proyecto para compilarlo.
-2. Copia los archivos generados `version.dll`, `xinput1_4.dll` y `OpenSteamTool.dll` al directorio raíz de Steam.
-> Si desplegaste `dwmapi.dll` anteriormente (en la raíz de Steam o en el directorio `bin`), elimínalo: está retirado y los restos impiden el inicio de las versiones actuales de Steam (`VGUI_Setup failed`).
+2. Copia los archivos generados `dwmapi.dll`, `xinput1_4.dll` y `OpenSteamTool.dll` al directorio raíz de Steam.
+> `dwmapi.dll` es la entrada de inyección por defecto: la carga `bin\vgui2_s.dll`, no la bloquea el anti-cheat de algunos juegos, por lo que se pueden jugar con normalidad (p. ej. EAC/BE); la desventaja es que los juegos que validan steamclient pueden crashear (p. ej. Onimusha / Dragon's Dogma 2 de Capcom).
+> `version.dll.disabled` es la entrada para el aislamiento en la primera carga, deshabilitada por defecto (mientras conserve el sufijo `.disabled` no se carga); para habilitarla, quita el sufijo volviendo a `version.dll` y reinicia Steam. Se carga al inicio como import estático de steam.exe, puede aislar steamclient para hookear una copia, resolviendo crasheos en algunos juegos (p. ej. Onimusha / Dragon's Dogma 2 de Capcom); la desventaja es que la bloquea el anti-cheat de algunos juegos, por lo que no se pueden jugar (p. ej. EAC/BE). Usa solo una entrada a la vez.
 3. Crea un directorio para Lua (por ejemplo, C:\steam\config\lua) y coloca allí tus scripts de Lua. La DLL los cargará y ejecutará automáticamente.
 4. Ejemplo de Lua:
 ```lua
@@ -274,9 +275,9 @@ build.bat
 ```
 
 ### Archivos de salida
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/version.dll`, `build/Debug/xinput1_4.dll`
+- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`, `build/Debug/version.dll.disabled`
 
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/version.dll`, `build/Release/xinput1_4.dll`
+- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`, `build/Release/version.dll.disabled`
 
 ## Descargo de responsabilidad
 Este proyecto se proporciona únicamente con fines de investigación y educativos. Eres responsable de cumplir con las leyes locales, los términos de servicio de la plataforma y las licencias de software correspondientes.

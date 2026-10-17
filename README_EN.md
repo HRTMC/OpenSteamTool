@@ -109,8 +109,9 @@ The `extract_tickets` tool dumps the `AppTicket` and `ETicket` hex strings you n
 
 ## Usage
 1. Run `build.bat` from the project root to build the project.
-2. Copy generated `version.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
-> If you previously deployed `dwmapi.dll` (Steam root or `bin` directory), delete it — it is retired; leftovers break current Steam startup (`VGUI_Setup failed`).
+2. Copy the generated `dwmapi.dll`, `xinput1_4.dll` and `OpenSteamTool.dll` to the Steam root directory.
+> `dwmapi.dll` is the default injection entry: loaded by `bin\vgui2_s.dll`, it is not blocked by the anti-cheat of some games, so they can be played normally (e.g. EAC/BE); the downside is that games which validate steamclient may crash (e.g. Capcom's Onimusha / Dragon's Dogma 2).
+> `version.dll.disabled` is the first-load-isolation entry, disabled by default (as long as it keeps the `.disabled` suffix it is not loaded); to enable it, drop the suffix back to `version.dll` and restart Steam. Loaded early as a static import of steam.exe, it can isolate steamclient to hook a copy, fixing crashes in some games (e.g. Capcom's Onimusha / Dragon's Dogma 2); the downside is that it is blocked by the anti-cheat of some games, so those cannot be played (e.g. EAC/BE). Use only one entry at a time.
 3. Create Lua directory (for example `C:\steam\config\lua`) and place Lua scripts there. The DLL will automatically load and execute them.
 4. Lua example:
 ```lua
@@ -283,8 +284,8 @@ build.bat
 ```
 
 ### Output
-- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/version.dll`, `build/Debug/xinput1_4.dll`
-- Release: `build/Release/OpenSteamTool.dll`, `build/Release/version.dll`, `build/Release/xinput1_4.dll`
+- Debug: `build/Debug/OpenSteamTool.dll`, `build/Debug/dwmapi.dll`, `build/Debug/xinput1_4.dll`, `build/Debug/version.dll.disabled`
+- Release: `build/Release/OpenSteamTool.dll`, `build/Release/dwmapi.dll`, `build/Release/xinput1_4.dll`, `build/Release/version.dll.disabled`
 
 ## Disclaimer
 This project is provided for research and educational purposes only. You are responsible for complying with local laws, platform terms of service, and software licenses.

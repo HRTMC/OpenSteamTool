@@ -174,12 +174,16 @@ target_compile_definitions(OpenSteamTool PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# dwmapi.dll hijack — NOT built or shipped anymore.
-# Its static forwarders (DWMAPI.*) resolve to itself, so any official module
-# that statically imports dwmapi (e.g. bin\vgui2_s.dll -> DwmExtendFrameIntoClientArea)
-# fails to load (VGUI_Setup failed). version.dll covers this trigger path;
-# the source stays dormant under dwmapi/ in case a transparent rewrite is needed.
+# dwmapi.dll hijack — anti-cheat friendly loader DLL.
+# Steam 的 bin\vgui2_s.dll 静态导入 dwmapi，本代理被它连带加载进 steam.exe，
+# 于是反作弊不拦系统 DLL 名时也能把 OpenSteamTool 带进进程。这里不能用
+# linker forwarder（DWMAPI.* 会命中同名自环，vgui2_s 加载失败 VGUI_Setup failed），
+# 改为运行期 GetProcAddress 转发到系统 dwmapi——见 dwmapi/dwmapi.cpp。
 # ---------------------------------------------------------------------------
+add_library(dwmapi SHARED
+    dwmapi/dwmapi.cpp
+    dwmapi/dwmapi.def
+)
 
 # ---------------------------------------------------------------------------
 # xinput1_4.dll hijack — secondary loader DLL placed alongside Steam.
@@ -190,10 +194,13 @@ add_library(xinput1_4 SHARED
 )
 
 # ---------------------------------------------------------------------------
-# version.dll hijack — loader-stage agent. steam.exe statically imports
-# VERSION.dll, so this proxy gets OpenSteamTool into the process before
-# steam.exe first loads steamclient64.dll (first-load redirect head start).
+# version.dll hijack — 早注隔离专用入口。steam.exe 静态导入 VERSION.dll，
+# 本代理随加载器最先进入进程，能抢在 steamclient64 首载之前架好重定向。
+# 但反作弊会拦 Steam 目录下这个未签名的 version.dll，所以默认禁用：产物直接
+# 带 .disabled 后缀，steam.exe 静态导入时找不到它、回退系统 version.dll，从而
+# 不触发反作弊；需要早注隔离时由工具侧去掉后缀再启用。
 # ---------------------------------------------------------------------------
 add_library(version SHARED
     version/version.cpp
 )
+set_target_properties(version PROPERTIES SUFFIX ".dll.disabled")
