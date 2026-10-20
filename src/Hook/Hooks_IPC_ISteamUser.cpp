@@ -21,7 +21,12 @@ namespace {
 
         // 真拥有和家庭共享的游戏：SteamID 一个字符都不碰，除非显式配了 dauth2。
         // 否则存档目录和云存档全跑到池子账号下，还可能触发 88500012。
-        if (Hooks_Package::HasValidLicense(appId) && !LuaConfig::IsDAuth2(appId)) return;
+        if (Hooks_Package::HasValidLicense(appId) && !LuaConfig::IsDAuth2(appId)) {
+            // 不改身份，但窗口收尾仍要观测：这里提前放行会绕过 IsAuthorizedPipe，
+            // 真实 SteamID 就永远落不了盘，切号后没有可用的伪装身份。
+            PipeManager::DenuvoAuth::ObserveWindowClose(pipe);
+            return;
+        }
 
         if (!PipeManager::DenuvoAuth::IsAuthorizedPipe(pipe)) {
             LOG_IPC_TRACE("IClientUser::GetSteamID: AppId={} not in authorization window, skip spoofing", appId);

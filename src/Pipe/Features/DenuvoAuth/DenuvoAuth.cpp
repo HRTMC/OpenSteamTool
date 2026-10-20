@@ -598,6 +598,16 @@ bool IsAuthorizedPipe(const CPipeClient* pipe) {
     return true;
 }
 
+void ObserveWindowClose(const CPipeClient* pipe) {
+    if (!pipe) return;
+    const PipeKey pipeKey = MakePipeKey(pipe);
+    std::lock_guard lock(g_authMutex);
+    ProcessAuth* auth = FindAuthForPipe(pipeKey);
+    if (auth) {
+        MaybePersistSteamIdOnWindowClose(*auth);
+    }
+}
+
 bool IsDenuvoPipe(const CPipeClient* pipe) {
     if (!pipe) return false;
     const PipeKey pipeKey = MakePipeKey(pipe);

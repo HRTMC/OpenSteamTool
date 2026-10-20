@@ -12,6 +12,10 @@ namespace PipeManager::DenuvoAuth {
     // within the active authorization window (startup grace period or ticket lease).
     [[nodiscard]] bool IsAuthorizedPipe(const CPipeClient* pipe);
 
+    // 观测授权窗口是否已结束，只跑收尾持久化，不做身份判定。
+    // 真拥有/家庭共享的 GetSteamID 会提前放行，不能指望 IsAuthorizedPipe 被走到。
+    void ObserveWindowClose(const CPipeClient* pipe);
+
     // True if the pipe belongs to a process detected or forced as Denuvo.
     [[nodiscard]] bool IsDenuvoPipe(const CPipeClient* pipe);
 
