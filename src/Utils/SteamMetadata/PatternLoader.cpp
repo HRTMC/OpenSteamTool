@@ -168,7 +168,7 @@ static void ShowDownloadFailedPopup(const std::string& dllName,
             "<Steam>\\opensteamtool\\pattern\\" + component + "\\" + sha256 + ".toml\n"
             "\n\n"
             "上游地址：\n"
-            "https://github.com/hazre/steam-monitor/tree/main/pattern/" + component + "\n"
+            "https://github.com/huanyuejue/steam-monitor/tree/main/pattern/" + component + "\n"
             "\n\n"
             "如仍无法解决，可按下方诊断信息反馈至：\n"
             "https://github.com/huanyuejue/OpenSteamTool/issues");

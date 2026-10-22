@@ -13,16 +13,16 @@
 namespace RemoteToml {
 
 namespace {
-    // 签名源：hazre/steam-monitor（定时采集 stable+beta，文件更全）。
+    // 签名源：huanyuejue/steam-monitor（定时采集 stable+beta，文件更全）。
     // 与 OpenSteam001 版布局差异：channel 不是分支而是 main 下的目录，
     // 因此分支固定 main，{channel} 走路径段——占位符集合不变，模板机制兼容。
     constexpr const char* kGithubTemplate =
-        "https://raw.githubusercontent.com/hazre/steam-monitor/"
+        "https://raw.githubusercontent.com/huanyuejue/steam-monitor/"
         "main/{channel}/{component}/{sha256}.toml";
     // gh-proxy 套在 raw 直连外面：对大仓库的 raw 文件比 jsDelivr 稳定，
     // 失败才回退 GitHub 直连保底。
     constexpr const char* kGhProxyTemplate =
-        "https://gh-proxy.com/https://raw.githubusercontent.com/hazre/steam-monitor/"
+        "https://gh-proxy.com/https://raw.githubusercontent.com/huanyuejue/steam-monitor/"
         "main/{channel}/{component}/{sha256}.toml";
 
     static bool HasPlaceholder(std::string_view text, std::string_view placeholder)
