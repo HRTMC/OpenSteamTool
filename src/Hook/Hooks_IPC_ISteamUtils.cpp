@@ -2,7 +2,6 @@
 #include "Hooks_IPC_ISteamUtils.h"
 #include "Hooks_Misc.h"
 #include "PendingAPICalls.h"
-#include "Pipe/Features/DenuvoAuth/DenuvoAuth.h"
 #include "Steam/Callback.h"
 #include "Utils/Logging/Log.h"
 
@@ -31,6 +30,9 @@ namespace {
     //  GetAppID reads and updates the response steamclient pre-filled.
     void HandlerPost_IClientUtils_GetAppID(CPipeClient* pipe, CUtlBuffer* pRead, CUtlBuffer* pWrite)
     {
+        // Once P2P is up, leave 480 so the socket matches the 480 session cert.
+        if (Hooks_Misc::ShouldReportOnlineFixAppId()) return;
+
         AppId_t realAppId = Hooks_Misc::ResolveAppId();
         if (!realAppId) return;
 
@@ -61,8 +63,6 @@ namespace {
                             *appId, hAsyncCall);
             return false;
         }
-        // 异步回调完成也算一次投递：pipe 拿不到，走 AppId 兜底绑定。
-        PipeManager::DenuvoAuth::OnEncryptedTicketDelivered(nullptr, *appId);
         LOG_IPC_DEBUG("Set K_EResultOK for EncryptedAppTicketResponse callback, AppId={} hAsyncCall=0x{:X}",
                         *appId, hAsyncCall);
         return true;
